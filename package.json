@@ -1,0 +1,69 @@
+{
+  "name": "mcstools-litematic-viewer",
+  "displayName": "McSTools Litematic Viewer",
+  "description": "Preview .litematic and .schem files in a VS Code editor tab using McSTools rendering code.",
+  "version": "0.0.1",
+  "publisher": "prometheus-local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
+  "keywords": [
+    "minecraft",
+    "litematic",
+    "schem",
+    "schematic",
+    "viewer"
+  ],
+  "activationEvents": [
+    "onCustomEditor:mcstools.schematicViewer"
+  ],
+  "main": "./dist/extension.cjs",
+  "dependencies": {
+    "prismarine-nbt": "2.7.0"
+  },
+  "devDependencies": {
+    "deepslate": "0.24.0",
+    "gl-matrix": "^3.4.3",
+    "vite": "6.2.5"
+  },
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "mcstools.schematicViewer",
+        "displayName": "McSTools Schematic Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.litematic"
+          },
+          {
+            "filenamePattern": "*.schem"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "mcstools.schematicViewer.openActiveFile",
+        "title": "McSTools: Open Active File In Schematic Viewer"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "npm run build:extension && npm run build:webview",
+    "build:extension": "vite build --config ./vite.extension.config.mjs",
+    "build:webview": "vite build --config ./vite.webview.config.mjs"
+  },
+  "files": [
+    "dist/**",
+    "resources/**",
+    "vendor/**",
+    "README.md",
+    "package.json"
+  ]
+}

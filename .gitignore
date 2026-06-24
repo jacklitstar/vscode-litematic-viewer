@@ -1,0 +1,9 @@
+node_modules/
+.dbg/
+dist/
+*.log
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+*.vsix
