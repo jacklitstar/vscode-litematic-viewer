@@ -39,7 +39,3 @@ This project is licensed under `AGPL-3.0`.
 
 This extension is an independent, unofficial project. It is not affiliated with, endorsed by, sponsored by, or otherwise related to Minecraft®, Mojang Studios, Microsoft, or any of their affiliates.
 
-
-## Notice
-
-See [NOTICE](file:///C:/Users/Jack/Documents/Github/Prometheus/research/McSTools/vscode-litematic-viewer/NOTICE) for attribution and upstream reference information, including `https://github.com/guapi-exe/McSTools`.

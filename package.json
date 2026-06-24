@@ -3,7 +3,15 @@
   "displayName": "%displayName%",
   "description": "%description%",
   "version": "0.0.1",
-  "publisher": "prometheus-local",
+  "publisher": "jacklitstar",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jacklitstar/vscode-litematic-viewer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jacklitstar/vscode-litematic-viewer/issues"
+  },
+  "homepage": "https://github.com/jacklitstar/vscode-litematic-viewer",
   "license": "AGPL-3.0",
   "engines": {
     "vscode": "^1.80.0"
