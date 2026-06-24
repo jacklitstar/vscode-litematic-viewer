@@ -69,8 +69,10 @@
   },
   "files": [
     "dist/**",
+    "node_modules/**",
     "resources/**",
     "vendor/**",
+    "LICENSE",
     "NOTICE",
     "README.md",
     "package.nls*.json",

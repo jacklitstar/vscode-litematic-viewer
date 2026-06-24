@@ -1,10 +1,8 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import * as vscode from 'vscode';
 import { createPreviewData } from './nbtPreview.js';
 
 const VIEW_TYPE = 'minecraftSchematicViewer.viewer';
-const DEBUG_ENV_PATH = '.dbg/blank-litematic-viewer.env';
 const DEFAULT_LOCALE = 'en';
 const LOCALE_STRINGS = {
   en: {
@@ -176,21 +174,6 @@ const getLocaleStrings = (language = DEFAULT_LOCALE) => {
   const localeKey = resolveLocaleKey(language);
   return { localeKey, strings: LOCALE_STRINGS[localeKey] || LOCALE_STRINGS[DEFAULT_LOCALE] };
 };
-const reportDebugEvent = (hypothesisId, location, msg, data = {}) => {
-  let url = 'http://127.0.0.1:7777/event';
-  let sessionId = 'blank-litematic-viewer';
-  try {
-    const env = fs.readFileSync(DEBUG_ENV_PATH, 'utf8');
-    url = env.match(/DEBUG_SERVER_URL=(.+)/)?.[1] || url;
-    sessionId = env.match(/DEBUG_SESSION_ID=(.+)/)?.[1] || sessionId;
-  } catch {}
-  fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ sessionId, runId: 'pre-fix', hypothesisId, location, msg, data, ts: Date.now() })
-  }).catch(() => {});
-};
-
 const getNonce = () => {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let value = '';
@@ -214,12 +197,6 @@ class SchematicViewerProvider {
 
   async resolveCustomEditor(document, webviewPanel, _token) {
     const { localeKey, strings } = getLocaleStrings(vscode.env.language);
-    // #region debug-point A:resolve-custom-editor
-    reportDebugEvent('A', 'src/extension.js:resolveCustomEditor', '[DEBUG] resolveCustomEditor called', {
-      fsPath: document.uri.fsPath,
-      viewType: VIEW_TYPE
-    });
-    // #endregion
     webviewPanel.webview.options = {
       enableScripts: true,
       localResourceRoots: [
@@ -240,51 +217,17 @@ class SchematicViewerProvider {
 
     const postPreview = async () => {
       try {
-        // #region debug-point A:read-file
-        reportDebugEvent('A', 'src/extension.js:postPreview:beforeRead', '[DEBUG] Reading schematic file', {
-          fsPath: document.uri.fsPath
-        });
-        // #endregion
         const bytes = await vscode.workspace.fs.readFile(document.uri);
-        // #region debug-point A:read-file-complete
-        reportDebugEvent('A', 'src/extension.js:postPreview:afterRead', '[DEBUG] Schematic file read complete', {
-          byteLength: bytes.length
-        });
-        // #endregion
         const preview = await createPreviewData(document.uri.fsPath, bytes);
-        // #region debug-point E:preview-created
-        reportDebugEvent('E', 'src/extension.js:postPreview:previewCreated', '[DEBUG] Preview data created', {
-          format: preview.format,
-          blockCount: preview.stats?.blockCount,
-          paletteSize: preview.stats?.paletteSize,
-          size: preview.size
-        });
-        // #endregion
         webviewPanel.title = preview.fileName;
-        // #region debug-point A:post-message-start
-        reportDebugEvent('A', 'src/extension.js:postPreview:postMessageStart', '[DEBUG] Sending preview to webview', {
-          fileName: preview.fileName
-        });
-        // #endregion
         const safePreview = JSON.stringify(preview);
         latestPreviewStr = safePreview;
         webviewPanel.webview.postMessage({
           type: 'setPreview',
           previewStr: safePreview
         });
-        // #region debug-point A:post-message
-        reportDebugEvent('A', 'src/extension.js:postPreview:postMessage', '[DEBUG] Preview posted to webview', {
-          type: 'setPreview',
-          fileName: preview.fileName
-        });
-        // #endregion
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        // #region debug-point E:preview-error
-        reportDebugEvent('E', 'src/extension.js:postPreview:catch', '[DEBUG] Preview generation failed', {
-          message
-        });
-        // #endregion
         latestPreviewStr = null;
         webviewPanel.webview.postMessage({
           type: 'setError',
@@ -305,10 +248,6 @@ class SchematicViewerProvider {
     webviewPanel.onDidDispose(() => watcher.dispose());
 
     webviewPanel.webview.onDidReceiveMessage((message) => {
-      if (message.type === 'debugEvent') {
-        reportDebugEvent(message.hypothesisId, message.location, message.msg, message.data);
-        return;
-      }
       if (message.type === 'ready') {
         // The webview has registered its message listener; (re)send the preview.
         if (latestPreviewStr !== null) {
@@ -363,7 +302,6 @@ class SchematicViewerProvider {
       try {
         const vscode = acquireVsCodeApi();
         window.__MINECRAFT_SCHEMATIC_VIEWER_VSCODE_API = vscode;
-        vscode.postMessage({ type: 'debugEvent', hypothesisId: 'A', location: 'html', msg: '[DEBUG] Inline script executed' });
       } catch (e) {}
     </script>
     <script nonce="${nonce}" type="module" src="${scriptUri}"></script>

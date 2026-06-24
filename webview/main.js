@@ -43,17 +43,6 @@ const strings = {
   ...config.strings
 };
 const formatString = (template, values = {}) => String(template).replace(/\{(\w+)\}/g, (_, key) => String(values[key] ?? `{${key}}`));
-const reportDebugEvent = (hypothesisId, location, msg, data = {}) => {
-  if (vscode) {
-    vscode.postMessage({
-      type: 'debugEvent',
-      hypothesisId,
-      location,
-      msg,
-      data
-    });
-  }
-};
 
 document.querySelector('#app').innerHTML = `
   <div class="app-shell">
@@ -202,11 +191,6 @@ const buildWorld = (preview) => {
 
 const ensureResources = async () => {
   if (!resourcesPromise) {
-    // #region debug-point B:resource-load-start
-    reportDebugEvent('B', 'webview/main.js:ensureResources:start', '[DEBUG] Starting resource load', {
-      resourceBase: config.resourceBase
-    });
-    // #endregion
     resourcesPromise = loadVsCodeThreeDBlocksResources(config.resourceBase);
   }
   return resourcesPromise;
@@ -218,12 +202,6 @@ const ensureRenderer = async () => {
       elements.canvas.getContext('webgl2', { antialias: true, alpha: true })
       || elements.canvas.getContext('webgl', { antialias: true, alpha: true })
     );
-    // #region debug-point C:webgl-context
-    reportDebugEvent('C', 'webview/main.js:ensureRenderer:webgl', '[DEBUG] WebGL context result', {
-      hasContext: !!gl,
-      contextType: gl instanceof WebGL2RenderingContext ? 'webgl2' : (gl ? 'webgl' : 'none')
-    });
-    // #endregion
     if (!gl) {
       throw new Error(strings.webglUnavailable);
     }
@@ -231,11 +209,6 @@ const ensureRenderer = async () => {
 
   if (!renderer) {
     const resources = await ensureResources();
-    // #region debug-point B:resource-load-complete
-    reportDebugEvent('B', 'webview/main.js:ensureRenderer:resourcesReady', '[DEBUG] Resources loaded before renderer init', {
-      hasResources: !!resources
-    });
-    // #endregion
     renderer = new ThreeDBlocksRenderer(
       gl,
       new BlockWorld([1, 1, 1]),
@@ -298,24 +271,10 @@ const fitCameraToPreview = (preview) => {
 };
 
 const renderPreview = async (preview) => {
-  // #region debug-point D:render-preview-start
-  reportDebugEvent('D', 'webview/main.js:renderPreview:start', '[DEBUG] renderPreview received preview', {
-    fileName: preview.fileName,
-    blockCount: preview.stats?.blockCount,
-    paletteSize: preview.stats?.paletteSize,
-    size: preview.size
-  });
-  // #endregion
   updateSummary(preview);
   showOverlay(strings.loadingResourcesTitle, strings.loadingResourcesMessage);
 
   const world = buildWorld(preview);
-  // #region debug-point D:world-built
-  reportDebugEvent('D', 'webview/main.js:renderPreview:worldBuilt', '[DEBUG] Block world built', {
-    worldSize: world.getSize(),
-    blockCount: world.getBlocks().length
-  });
-  // #endregion
   const currentRenderer = await ensureRenderer();
 
   showOverlay(strings.meshingTitle, strings.meshingMessage);
@@ -326,19 +285,8 @@ const renderPreview = async (preview) => {
   });
 
   fitCameraToPreview(preview);
-  // #region debug-point D:camera-fit
-  reportDebugEvent('D', 'webview/main.js:renderPreview:cameraFit', '[DEBUG] Camera fit complete', {
-    canvasWidth: elements.canvas.clientWidth,
-    canvasHeight: elements.canvas.clientHeight
-  });
-  // #endregion
   interactiveCanvas?.redraw();
   hideOverlay();
-  // #region debug-point D:render-complete
-  reportDebugEvent('D', 'webview/main.js:renderPreview:complete', '[DEBUG] Render preview completed', {
-    fileName: preview.fileName
-  });
-  // #endregion
 
   vscode?.setState({
     fileName: preview.fileName,
@@ -355,41 +303,20 @@ window.addEventListener('message', async (event) => {
 
   if (message?.type === 'setPreview') {
     const preview = message.previewStr ? JSON.parse(message.previewStr) : message.preview;
-    // #region debug-point A:webview-receive-preview
-    reportDebugEvent('A', 'webview/main.js:message:setPreview', '[DEBUG] Webview received setPreview', {
-      hasPreview: !!preview,
-      fileName: preview?.fileName
-    });
-    // #endregion
     try {
       await renderPreview(preview);
     } catch (error) {
       const description = error instanceof Error ? error.message : String(error);
-      // #region debug-point B:webview-render-error
-      reportDebugEvent('B', 'webview/main.js:message:setPreview:catch', '[DEBUG] renderPreview failed', {
-        message: description
-      });
-      // #endregion
       showOverlay(strings.previewFailedTitle, description, 'error');
     }
     return;
   }
 
   if (message?.type === 'setError') {
-    // #region debug-point A:webview-receive-error
-    reportDebugEvent('A', 'webview/main.js:message:setError', '[DEBUG] Webview received setError', {
-      message: message.message || strings.unknownError
-    });
-    // #endregion
     showOverlay(strings.previewFailedTitle, message.message || strings.unknownError, 'error');
   }
 });
 
-// #region debug-point A:webview-boot
-reportDebugEvent('A', 'webview/main.js:boot', '[DEBUG] Webview booted', {
-  hasAcquireVsCodeApi: !!vscode
-});
-// #endregion
 showOverlay(strings.waitingTitle, strings.waitingMessage);
 
 // Signal the extension host that the message listener is registered, so it can
