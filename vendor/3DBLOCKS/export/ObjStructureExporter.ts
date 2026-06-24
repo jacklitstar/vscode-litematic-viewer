@@ -377,7 +377,7 @@ const imageDataToPngBytes = async (
 };
 
 const createMtlText = () => [
-  '# Exported by MCSTools 3DBLOCKS',
+  '# Exported by Minecraft Schematic Viewer 3DBLOCKS',
   '',
   `newmtl ${MATERIAL_NAME}`,
   'Ka 0 0 0',
@@ -406,7 +406,7 @@ class StreamingObjWriter {
   ) {}
 
   async writeHeader(mtlFileName: string) {
-    this.line('# Exported by MCSTools 3DBLOCKS');
+    this.line('# Exported by Minecraft Schematic Viewer 3DBLOCKS');
     this.line(`mtllib ${mtlFileName}`);
     this.line('');
     this.line(`usemtl ${MATERIAL_NAME}`);

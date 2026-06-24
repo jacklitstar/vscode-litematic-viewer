@@ -1,11 +1,12 @@
-# McSTools Litematic Viewer
+# Minecraft Schematic Viewer
 
 This VS Code extension previews Minecraft `.litematic` and WorldEdit `.schem` files directly in an editor tab.
 
-## What it reuses from `research/McSTools`
 
-- The format understanding follows the active McSTools parser paths for `.litematic` and `.schem`.
-- The 3D rendering uses McSTools' `3DBLOCKS` renderer and Minecraft resource data.
+## Implementation Notes
+
+- The format understanding follows the current parser paths for `.litematic` and `.schem`.
+- The 3D rendering uses the bundled `3DBLOCKS` renderer and Minecraft resource data.
 - Deprecated viewer code paths are intentionally ignored.
 
 ## Behavior
@@ -17,15 +18,28 @@ This VS Code extension previews Minecraft `.litematic` and WorldEdit `.schem` fi
 
 ## Build
 
-Run these commands from `research/McSTools/vscode-litematic-viewer`:
+Run these commands from the extension project folder:
 
 ```bash
 npm run build
 ```
 
-This expects the parent `research/McSTools` workspace dependencies to already be installed.
+This expects the project dependencies to already be installed.
 
 ## Packaging Notes
 
 - The extension bundle is emitted to `dist/`.
 - Minecraft renderer resources are expected under `resources/minecraft`.
+
+## License
+
+This project is licensed under `AGPL-3.0`.
+
+## Disclaimer
+
+This extension is an independent, unofficial project. It is not affiliated with, endorsed by, sponsored by, or otherwise related to Minecraft®, Mojang Studios, Microsoft, or any of their affiliates.
+
+
+## Notice
+
+See [NOTICE](file:///C:/Users/Jack/Documents/Github/Prometheus/research/McSTools/vscode-litematic-viewer/NOTICE) for attribution and upstream reference information, including `https://github.com/guapi-exe/McSTools`.

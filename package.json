@@ -1,12 +1,12 @@
 {
-  "name": "mcstools-litematic-viewer",
-  "displayName": "McSTools Litematic Viewer",
-  "description": "Preview .litematic and .schem files in a VS Code editor tab using McSTools rendering code.",
+  "name": "minecraft-schematic-viewer",
+  "displayName": "%displayName%",
+  "description": "%description%",
   "version": "0.0.1",
   "publisher": "prometheus-local",
-  "license": "MIT",
+  "license": "AGPL-3.0",
   "engines": {
-    "vscode": "^1.96.0"
+    "vscode": "^1.80.0"
   },
   "categories": [
     "Other",
@@ -20,7 +20,7 @@
     "viewer"
   ],
   "activationEvents": [
-    "onCustomEditor:mcstools.schematicViewer"
+    "onCustomEditor:minecraftSchematicViewer.viewer"
   ],
   "main": "./dist/extension.cjs",
   "dependencies": {
@@ -34,8 +34,8 @@
   "contributes": {
     "customEditors": [
       {
-        "viewType": "mcstools.schematicViewer",
-        "displayName": "McSTools Schematic Viewer",
+        "viewType": "minecraftSchematicViewer.viewer",
+        "displayName": "%customEditor.displayName%",
         "selector": [
           {
             "filenamePattern": "*.litematic"
@@ -49,8 +49,8 @@
     ],
     "commands": [
       {
-        "command": "mcstools.schematicViewer.openActiveFile",
-        "title": "McSTools: Open Active File In Schematic Viewer"
+        "command": "minecraftSchematicViewer.openActiveFile",
+        "title": "%command.openActiveFile.title%"
       }
     ]
   },
@@ -63,7 +63,9 @@
     "dist/**",
     "resources/**",
     "vendor/**",
+    "NOTICE",
     "README.md",
+    "package.nls*.json",
     "package.json"
   ]
 }

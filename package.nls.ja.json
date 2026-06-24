@@ -1,0 +1,6 @@
+{
+  "displayName": "Minecraft スキーマティックビューアー",
+  "description": "VS Code のエディタータブで .litematic と .schem ファイルをプレビューします。",
+  "customEditor.displayName": "Minecraft スキーマティックビューアー",
+  "command.openActiveFile.title": "Minecraft スキーマティックビューアー: アクティブファイルを開く"
+}

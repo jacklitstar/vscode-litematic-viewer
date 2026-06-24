@@ -1,0 +1,6 @@
+{
+  "displayName": "Minecraft Schematic Viewer",
+  "description": "Preview .litematic and .schem files in a VS Code editor tab.",
+  "customEditor.displayName": "Minecraft Schematic Viewer",
+  "command.openActiveFile.title": "Minecraft Schematic Viewer: Open Active File"
+}

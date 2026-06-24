@@ -1,0 +1,6 @@
+{
+  "displayName": "Visionneuse de schémas Minecraft",
+  "description": "Prévisualisez des fichiers .litematic et .schem dans un onglet d’éditeur VS Code.",
+  "customEditor.displayName": "Visionneuse de schémas Minecraft",
+  "command.openActiveFile.title": "Visionneuse de schémas Minecraft : ouvrir le fichier actif"
+}

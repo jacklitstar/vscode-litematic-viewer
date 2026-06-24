@@ -11,12 +11,38 @@ import {
 } from '../vendor/3DBLOCKS/index.ts';
 import { loadVsCodeThreeDBlocksResources } from './loadResources.js';
 
-const vscode = window.__MCSTOOLS_VSCODE_API
+const vscode = window.__MINECRAFT_SCHEMATIC_VIEWER_VSCODE_API
   || (typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : null);
 if (vscode) {
-  window.__MCSTOOLS_VSCODE_API = vscode;
+  window.__MINECRAFT_SCHEMATIC_VIEWER_VSCODE_API = vscode;
 }
-const config = window.__MCSTOOLS_VIEWER_CONFIG || {};
+const config = window.__MINECRAFT_SCHEMATIC_VIEWER_CONFIG || {};
+const strings = {
+  editorTitle: 'Minecraft Schematic Viewer',
+  summary: 'Summary',
+  materials: 'Materials',
+  file: 'File',
+  size: 'Size',
+  blocks: 'Blocks',
+  palette: 'Palette',
+  regions: 'Regions',
+  noMaterialsLoaded: 'No materials loaded yet.',
+  noNonAirMaterials: 'No non-air materials found.',
+  loadingTitle: 'Loading…',
+  preparingRenderer: 'Preparing renderer.',
+  loadingResourcesTitle: 'Loading resources',
+  loadingResourcesMessage: 'Preparing block models and textures.',
+  meshingTitle: 'Meshing structure',
+  meshingMessage: 'Building chunk meshes for the preview.',
+  meshingProgress: 'Built {built}/{total} chunks.',
+  previewFailedTitle: 'Preview failed',
+  unknownError: 'Unknown error.',
+  waitingTitle: 'Waiting for preview',
+  waitingMessage: 'Open a .litematic or .schem file to render it here.',
+  webglUnavailable: 'WebGL is not available in this VS Code webview.',
+  ...config.strings
+};
+const formatString = (template, values = {}) => String(template).replace(/\{(\w+)\}/g, (_, key) => String(values[key] ?? `{${key}}`));
 const reportDebugEvent = (hypothesisId, location, msg, data = {}) => {
   if (vscode) {
     vscode.postMessage({
@@ -36,27 +62,27 @@ document.querySelector('#app').innerHTML = `
         <canvas id="viewer-canvas"></canvas>
         <div class="overlay" id="overlay">
           <div class="overlay-card">
-            <div class="overlay-title" id="overlay-title">Loading…</div>
-            <div class="overlay-message" id="overlay-message">Preparing renderer.</div>
+            <div class="overlay-title" id="overlay-title">${strings.loadingTitle}</div>
+            <div class="overlay-message" id="overlay-message">${strings.preparingRenderer}</div>
           </div>
         </div>
       </div>
     </section>
     <aside class="sidebar">
       <section class="card">
-        <h2>Summary</h2>
+        <h2>${strings.summary}</h2>
         <dl class="summary-grid">
-          <div class="summary-wide"><dt>File</dt><dd id="summary-file">-</dd></div>
-          <div><dt>Size</dt><dd id="summary-size">-</dd></div>
-          <div><dt>Blocks</dt><dd id="summary-blocks">-</dd></div>
-          <div><dt>Palette</dt><dd id="summary-palette">-</dd></div>
-          <div><dt>Regions</dt><dd id="summary-regions">-</dd></div>
+          <div class="summary-wide"><dt>${strings.file}</dt><dd id="summary-file">-</dd></div>
+          <div><dt>${strings.size}</dt><dd id="summary-size">-</dd></div>
+          <div><dt>${strings.blocks}</dt><dd id="summary-blocks">-</dd></div>
+          <div><dt>${strings.palette}</dt><dd id="summary-palette">-</dd></div>
+          <div><dt>${strings.regions}</dt><dd id="summary-regions">-</dd></div>
         </dl>
       </section>
       <section class="card">
-        <h2>Materials</h2>
+        <h2>${strings.materials}</h2>
         <div class="materials-list" id="materials-list">
-          <div class="empty-state">No materials loaded yet.</div>
+          <div class="empty-state">${strings.noMaterialsLoaded}</div>
         </div>
       </section>
     </aside>
@@ -128,7 +154,7 @@ const hideOverlay = () => {
 
 const updateMaterials = (preview) => {
   if (!preview.materials.length) {
-    elements.materials.innerHTML = '<div class="empty-state">No non-air materials found.</div>';
+    elements.materials.innerHTML = `<div class="empty-state">${strings.noNonAirMaterials}</div>`;
     return;
   }
 
@@ -199,7 +225,7 @@ const ensureRenderer = async () => {
     });
     // #endregion
     if (!gl) {
-      throw new Error('WebGL is not available in this VS Code webview.');
+      throw new Error(strings.webglUnavailable);
     }
   }
 
@@ -220,7 +246,7 @@ const ensureRenderer = async () => {
         lazyUpload: false,
         maxPixelRatio: 1.25,
         projectionFovDeg: 45,
-        versionTag: 'mcstools-vscode-viewer'
+        versionTag: 'minecraft-schematic-viewer'
       }
     );
   }
@@ -281,7 +307,7 @@ const renderPreview = async (preview) => {
   });
   // #endregion
   updateSummary(preview);
-  showOverlay('Loading resources', 'Preparing block models and textures.');
+  showOverlay(strings.loadingResourcesTitle, strings.loadingResourcesMessage);
 
   const world = buildWorld(preview);
   // #region debug-point D:world-built
@@ -292,10 +318,10 @@ const renderPreview = async (preview) => {
   // #endregion
   const currentRenderer = await ensureRenderer();
 
-  showOverlay('Meshing structure', 'Building chunk meshes for the preview.');
+  showOverlay(strings.meshingTitle, strings.meshingMessage);
   await currentRenderer.setStructureProgressiveAsync(world, 5000, undefined, (built, total) => {
     if (total > 0) {
-      showOverlay('Meshing structure', `Built ${built}/${total} chunks.`);
+      showOverlay(strings.meshingTitle, formatString(strings.meshingProgress, { built, total }));
     }
   });
 
@@ -344,7 +370,7 @@ window.addEventListener('message', async (event) => {
         message: description
       });
       // #endregion
-      showOverlay('Preview failed', description, 'error');
+      showOverlay(strings.previewFailedTitle, description, 'error');
     }
     return;
   }
@@ -352,10 +378,10 @@ window.addEventListener('message', async (event) => {
   if (message?.type === 'setError') {
     // #region debug-point A:webview-receive-error
     reportDebugEvent('A', 'webview/main.js:message:setError', '[DEBUG] Webview received setError', {
-      message: message.message || 'Unknown error.'
+      message: message.message || strings.unknownError
     });
     // #endregion
-    showOverlay('Preview failed', message.message || 'Unknown error.', 'error');
+    showOverlay(strings.previewFailedTitle, message.message || strings.unknownError, 'error');
   }
 });
 
@@ -364,7 +390,7 @@ reportDebugEvent('A', 'webview/main.js:boot', '[DEBUG] Webview booted', {
   hasAcquireVsCodeApi: !!vscode
 });
 // #endregion
-showOverlay('Waiting for preview', 'Open a .litematic or .schem file to render it here.');
+showOverlay(strings.waitingTitle, strings.waitingMessage);
 
 // Signal the extension host that the message listener is registered, so it can
 // (re)send the preview. This avoids a race where the preview is posted before
