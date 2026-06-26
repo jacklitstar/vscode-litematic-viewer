@@ -167,12 +167,42 @@ const updateSummary = (preview) => {
   updateMaterials(preview);
 };
 
+const positionKey = (x, y, z) => `${x},${y},${z}`;
+
+const resolveStateProperties = (state, x, y, z, stateByPosition) => {
+  const properties = { ...(state.properties || {}) };
+  if (!/_door$/.test(String(state.id)) || properties.half) {
+    return properties;
+  }
+
+  const above = stateByPosition.get(positionKey(x, y + 1, z));
+  const below = stateByPosition.get(positionKey(x, y - 1, z));
+  if (above?.id === state.id) {
+    properties.half = 'lower';
+  } else if (below?.id === state.id) {
+    properties.half = 'upper';
+  }
+  return properties;
+};
+
 const buildWorld = (preview) => {
   const world = new BlockWorld([
     Math.max(1, preview.size.width),
     Math.max(1, preview.size.height),
     Math.max(1, preview.size.length)
   ]);
+  const stateByPosition = new Map();
+
+  for (let index = 0; index < preview.blocks.length; index += 4) {
+    const x = preview.blocks[index];
+    const y = preview.blocks[index + 1];
+    const z = preview.blocks[index + 2];
+    const paletteIndex = preview.blocks[index + 3];
+    const state = preview.palette[paletteIndex];
+    if (state) {
+      stateByPosition.set(positionKey(x, y, z), state);
+    }
+  }
 
   for (let index = 0; index < preview.blocks.length; index += 4) {
     const x = preview.blocks[index];
@@ -183,7 +213,7 @@ const buildWorld = (preview) => {
     if (!state) {
       continue;
     }
-    world.addBlock([x, y, z], state.id, state.properties || {});
+    world.addBlock([x, y, z], state.id, resolveStateProperties(state, x, y, z, stateByPosition));
   }
 
   return world;

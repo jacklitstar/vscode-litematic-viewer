@@ -1,23 +1,7 @@
 import path from 'node:path';
 import * as nbt from 'prismarine-nbt';
-import fs from 'node:fs';
 
 const AIR_IDS = new Set(['air', 'minecraft:air']);
-const DEBUG_ENV_PATH = '.dbg/blank-litematic-viewer.env';
-const reportDebugEvent = (hypothesisId, location, msg, data = {}) => {
-  let url = 'http://127.0.0.1:7777/event';
-  let sessionId = 'blank-litematic-viewer';
-  try {
-    const env = fs.readFileSync(DEBUG_ENV_PATH, 'utf8');
-    url = env.match(/DEBUG_SERVER_URL=(.+)/)?.[1] || url;
-    sessionId = env.match(/DEBUG_SESSION_ID=(.+)/)?.[1] || sessionId;
-  } catch {}
-  fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ sessionId, runId: 'pre-fix', hypothesisId, location, msg, data, ts: Date.now() })
-  }).catch(() => {});
-};
 
 const AIR_STATE = Object.freeze({
   id: 'minecraft:air',
@@ -66,10 +50,16 @@ const cloneState = (state) => ({
   properties: { ...state.properties }
 });
 
-const parsePaletteStateEntry = (entry) => ({
-  id: String(entry?.Name || 'minecraft:air'),
-  properties: normalizeProperties(entry?.Properties || {})
-});
+const parsePaletteStateEntry = (entry) => {
+  const nameState = parseBlockStateString(String(entry?.Name || 'minecraft:air'));
+  return {
+    id: nameState.id,
+    properties: {
+      ...nameState.properties,
+      ...normalizeProperties(entry?.Properties || {})
+    }
+  };
+};
 
 const parseBlockStateString = (value) => {
   if (typeof value !== 'string' || value.length === 0) {
@@ -114,13 +104,16 @@ const getPackedValue = (longArray, index, bits) => {
   const endArrayIndex = Number(((BigInt(index + 1) * BigInt(bits)) - 1n) >> 6n);
   const startBitOffset = Number(startOffset & 63n);
   const maxEntryValue = (1n << BigInt(bits)) - 1n;
-  const firstPart = BigInt(longArray[startArrayIndex] ?? 0n);
+  // NBT long arrays are signed 64-bit values, but block-state packing treats
+  // each entry as an unsigned 64-bit word. Sign-extending negative values here
+  // corrupts palette indices and makes blocks disappear seemingly at random.
+  const firstPart = BigInt.asUintN(64, BigInt(longArray[startArrayIndex] ?? 0n));
 
   if (startArrayIndex === endArrayIndex) {
     return Number((firstPart >> BigInt(startBitOffset)) & maxEntryValue);
   }
 
-  const secondPart = BigInt(longArray[endArrayIndex] ?? 0n);
+  const secondPart = BigInt.asUintN(64, BigInt(longArray[endArrayIndex] ?? 0n));
   const endBitOffset = BigInt(64 - startBitOffset);
   const combined = (firstPart >> BigInt(startBitOffset)) | (secondPart << endBitOffset);
   return Number(combined & maxEntryValue);
@@ -340,38 +333,15 @@ const parseSchemPreview = (root, fileName) => {
 export const createPreviewData = async (fileName, fileBytes) => {
   const ext = path.extname(fileName).toLowerCase();
   const buffer = Buffer.from(fileBytes);
-  // #region debug-point E:parse-start
-  reportDebugEvent('E', 'src/nbtPreview.js:createPreviewData:start', '[DEBUG] Starting preview parse', {
-    fileName: path.basename(fileName),
-    ext,
-    byteLength: buffer.length
-  });
-  // #endregion
   const { parsed } = await nbt.parse(buffer, 'big');
   const root = nbt.simplify(parsed);
 
   if (ext === '.litematic') {
-    const preview = parseLitematicPreview(root, path.basename(fileName));
-    // #region debug-point E:litematic-parse-result
-    reportDebugEvent('E', 'src/nbtPreview.js:createPreviewData:litematic', '[DEBUG] Parsed litematic preview', {
-      blockCount: preview.stats?.blockCount,
-      paletteSize: preview.stats?.paletteSize,
-      size: preview.size
-    });
-    // #endregion
-    return preview;
+    return parseLitematicPreview(root, path.basename(fileName));
   }
 
   if (ext === '.schem') {
-    const preview = parseSchemPreview(root, path.basename(fileName));
-    // #region debug-point E:schem-parse-result
-    reportDebugEvent('E', 'src/nbtPreview.js:createPreviewData:schem', '[DEBUG] Parsed schem preview', {
-      blockCount: preview.stats?.blockCount,
-      paletteSize: preview.stats?.paletteSize,
-      size: preview.size
-    });
-    // #endregion
-    return preview;
+    return parseSchemPreview(root, path.basename(fileName));
   }
 
   throw new Error(`Unsupported schematic extension: ${ext}`);

@@ -61,6 +61,54 @@ const flattenModels = (blockModels) => {
   }
 };
 
+const parseVariantProperties = (variantKey) => {
+  if (typeof variantKey !== 'string' || variantKey.length === 0) {
+    return {};
+  }
+
+  const properties = {};
+  for (const chunk of variantKey.split(',')) {
+    if (!chunk) continue;
+    const [key, value] = chunk.split('=', 2);
+    if (key && value !== undefined) {
+      properties[key] = value;
+    }
+  }
+  return properties;
+};
+
+const deriveDefaultProperties = (definition) => {
+  if (!definition || typeof definition !== 'object') {
+    return {};
+  }
+
+  if (definition.variants && typeof definition.variants === 'object') {
+    const keys = Object.keys(definition.variants);
+    if (keys.length > 0) {
+      return parseVariantProperties(keys[0]);
+    }
+  }
+
+  if (Array.isArray(definition.multipart)) {
+    for (const part of definition.multipart) {
+      const when = part?.when;
+      if (when && !Array.isArray(when.OR) && typeof when === 'object') {
+        const properties = {};
+        for (const [key, value] of Object.entries(when)) {
+          if (typeof value === 'string' && value.length > 0) {
+            properties[key] = value.split('|')[0];
+          }
+        }
+        if (Object.keys(properties).length > 0) {
+          return properties;
+        }
+      }
+    }
+  }
+
+  return {};
+};
+
 export const loadVsCodeThreeDBlocksResources = async (resourceBase) => {
   const baseUrl = `${resourceBase}/minecraft`;
   const config = await fetchJson(`${baseUrl}/config.json`);
@@ -71,8 +119,10 @@ export const loadVsCodeThreeDBlocksResources = async (resourceBase) => {
   const { atlasSize, imageData } = await loadImageData(`${baseUrl}/assets/atlas/atlas.png`);
 
   const blockDefinitions = {};
+  const blockDefaultProperties = {};
   for (const id of Object.keys(blockstates)) {
     blockDefinitions[`${config.namespace}:${id}`] = BlockDefinition.fromJson(blockstates[id]);
+    blockDefaultProperties[`${config.namespace}:${id}`] = deriveDefaultProperties(blockstates[id]);
   }
 
   const blockModels = {};
@@ -128,8 +178,8 @@ export const loadVsCodeThreeDBlocksResources = async (resourceBase) => {
     getBlockProperties() {
       return null;
     },
-    getDefaultBlockProperties() {
-      return {};
+    getDefaultBlockProperties(id) {
+      return blockDefaultProperties[id.toString()] || {};
     },
     getItemModel() {
       return null;

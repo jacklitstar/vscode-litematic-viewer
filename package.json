@@ -2,7 +2,7 @@
   "name": "minecraft-schematic-viewer",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "jacklitstar",
   "repository": {
     "type": "git",
@@ -12,6 +12,7 @@
     "url": "https://github.com/jacklitstar/vscode-litematic-viewer/issues"
   },
   "homepage": "https://github.com/jacklitstar/vscode-litematic-viewer",
+  "icon": "assets/icon.png",
   "license": "AGPL-3.0",
   "engines": {
     "vscode": "^1.80.0"
@@ -68,6 +69,7 @@
     "build:webview": "vite build --config ./vite.webview.config.mjs"
   },
   "files": [
+    "assets/**",
     "dist/**",
     "node_modules/**",
     "resources/**",
