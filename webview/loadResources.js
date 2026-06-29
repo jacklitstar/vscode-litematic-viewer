@@ -77,6 +77,64 @@ const parseVariantProperties = (variantKey) => {
   return properties;
 };
 
+const normalizeConditionValue = (value) => {
+  if (Array.isArray(value)) {
+    return value.map((entry) => String(entry)).join('|');
+  }
+  if (value === undefined || value === null) {
+    return '';
+  }
+  return String(value);
+};
+
+const normalizeMultipartCondition = (condition) => {
+  if (!condition || typeof condition !== 'object') {
+    return {};
+  }
+
+  if (Array.isArray(condition.OR)) {
+    return {
+      OR: condition.OR
+        .map((entry) => normalizeMultipartCondition(entry))
+        .filter((entry) => entry && Object.keys(entry).length > 0)
+    };
+  }
+
+  if (Array.isArray(condition.AND)) {
+    const merged = {};
+    for (const entry of condition.AND) {
+      const normalized = normalizeMultipartCondition(entry);
+      if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized.OR)) {
+        continue;
+      }
+      Object.assign(merged, normalized);
+    }
+    return merged;
+  }
+
+  const normalized = {};
+  for (const [key, value] of Object.entries(condition)) {
+    normalized[key] = normalizeConditionValue(value);
+  }
+  return normalized;
+};
+
+const normalizeBlockDefinition = (definition) => {
+  if (!definition || typeof definition !== 'object') {
+    return definition;
+  }
+
+  return {
+    ...definition,
+    multipart: Array.isArray(definition.multipart)
+      ? definition.multipart.map((part) => ({
+          ...part,
+          when: normalizeMultipartCondition(part?.when)
+        }))
+      : definition.multipart
+  };
+};
+
 const deriveDefaultProperties = (definition) => {
   if (!definition || typeof definition !== 'object') {
     return {};
@@ -121,8 +179,9 @@ export const loadVsCodeThreeDBlocksResources = async (resourceBase) => {
   const blockDefinitions = {};
   const blockDefaultProperties = {};
   for (const id of Object.keys(blockstates)) {
-    blockDefinitions[`${config.namespace}:${id}`] = BlockDefinition.fromJson(blockstates[id]);
-    blockDefaultProperties[`${config.namespace}:${id}`] = deriveDefaultProperties(blockstates[id]);
+    const normalizedDefinition = normalizeBlockDefinition(blockstates[id]);
+    blockDefinitions[`${config.namespace}:${id}`] = BlockDefinition.fromJson(normalizedDefinition);
+    blockDefaultProperties[`${config.namespace}:${id}`] = deriveDefaultProperties(normalizedDefinition);
   }
 
   const blockModels = {};
