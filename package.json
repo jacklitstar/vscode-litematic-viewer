@@ -2,7 +2,7 @@
   "name": "minecraft-schematic-viewer",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "publisher": "jacklitstar",
   "repository": {
     "type": "git",
@@ -37,10 +37,10 @@
   ],
   "main": "./dist/extension.cjs",
   "dependencies": {
+    "deepslate": "0.24.0",
     "prismarine-nbt": "2.7.0"
   },
   "devDependencies": {
-    "deepslate": "0.24.0",
     "gl-matrix": "^3.4.3",
     "vite": "6.2.5"
   },
