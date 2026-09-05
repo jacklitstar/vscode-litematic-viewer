@@ -1,10 +1,12 @@
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { Worker } from 'node:worker_threads';
 import * as vscode from 'vscode';
 
 const VIEW_TYPE = 'minecraftSchematicViewer.viewer';
 const DEFAULT_LOCALE = 'en';
 const PREVIEW_BLOCK_CHUNK_SIZE = 100_000;
+const PREVIEW_PROCESS_FILE_SIZE_THRESHOLD = 1_000_000;
 const LOCALE_STRINGS = {
   en: {
     editorTitle: 'Minecraft Schematic Viewer',
@@ -196,7 +198,37 @@ const getNonce = () => {
   return value;
 };
 
-const startPreviewWorker = (extensionFsPath, fileName) => {
+const PREVIEW_WORKER_SOURCE = `
+const { parentPort, workerData } = require('node:worker_threads');
+const { pathToFileURL } = require('node:url');
+
+(async () => {
+  const moduleUrl = pathToFileURL(workerData.modulePath).href;
+  const mod = await import(moduleUrl);
+  const preview = await mod.createPreviewData(workerData.fileName, workerData.bytes, { yieldInterval: 0 });
+  parentPort.postMessage({ type: 'result', preview });
+})().catch((error) => {
+  parentPort.postMessage({
+    type: 'error',
+    message: error instanceof Error ? error.message : String(error)
+  });
+});
+`;
+
+const killActiveWorker = (worker) => {
+  if (!worker) {
+    return;
+  }
+  if (typeof worker.kill === 'function') {
+    worker.kill();
+    return;
+  }
+  if (typeof worker.terminate === 'function') {
+    worker.terminate().catch(() => {});
+  }
+};
+
+const startPreviewProcess = (extensionFsPath, fileName) => {
   const processPath = path.join(extensionFsPath, 'src', 'previewProcess.mjs');
   const modulePath = path.join(extensionFsPath, 'src', 'nbtPreview.js');
   const worker = spawn(process.execPath, [processPath], {
@@ -251,6 +283,51 @@ const startPreviewWorker = (extensionFsPath, fileName) => {
       }
 
       reject(new Error('Preview worker exited without a result payload.'));
+    });
+  });
+
+  return { worker, result };
+};
+
+const startPreviewThread = (extensionFsPath, fileName, fileBytes) => {
+  const modulePath = path.join(extensionFsPath, 'src', 'nbtPreview.js');
+  const workerBytes = fileBytes.byteOffset === 0 && fileBytes.byteLength === fileBytes.buffer.byteLength
+    ? fileBytes
+    : Uint8Array.from(fileBytes);
+  const worker = new Worker(PREVIEW_WORKER_SOURCE, {
+    eval: true,
+    workerData: {
+      modulePath,
+      fileName,
+      bytes: workerBytes
+    },
+    transferList: [workerBytes.buffer]
+  });
+
+  const result = new Promise((resolve, reject) => {
+    const cleanup = () => {
+      worker.removeAllListeners();
+    };
+
+    worker.once('message', (message) => {
+      cleanup();
+      if (message?.type === 'result') {
+        resolve(message.preview);
+        return;
+      }
+      reject(new Error(message?.message || 'Preview worker failed.'));
+    });
+
+    worker.once('error', (error) => {
+      cleanup();
+      reject(error);
+    });
+
+    worker.once('exit', (code) => {
+      cleanup();
+      if (code !== 0) {
+        reject(new Error(`Preview worker exited with code ${code}.`));
+      }
     });
   });
 
@@ -354,7 +431,7 @@ class SchematicViewerProvider {
     const cancelActiveLoad = () => {
       activeLoadId += 1;
       if (activeWorker) {
-        activeWorker.kill();
+        killActiveWorker(activeWorker);
         activeWorker = null;
       }
       activeLoadPromise = null;
@@ -365,7 +442,7 @@ class SchematicViewerProvider {
       latestPreview = null;
 
       if (activeWorker) {
-        activeWorker.terminate().catch(() => {});
+        killActiveWorker(activeWorker);
         activeWorker = null;
       }
 
@@ -376,16 +453,22 @@ class SchematicViewerProvider {
           return;
         }
         await postStatus(strings.loadingTitle, strings.parsingStructure);
-        const workerJob = startPreviewWorker(this.extensionUri.fsPath, document.uri.fsPath);
+        const workerJob = fileInfo.size > PREVIEW_PROCESS_FILE_SIZE_THRESHOLD
+          ? startPreviewProcess(this.extensionUri.fsPath, document.uri.fsPath)
+          : startPreviewThread(
+              this.extensionUri.fsPath,
+              document.uri.fsPath,
+              await vscode.workspace.fs.readFile(document.uri)
+            );
         activeWorker = workerJob.worker;
         const preview = await workerJob.result;
         if (disposed || loadId !== activeLoadId) {
-          activeWorker?.kill();
+          killActiveWorker(activeWorker);
           activeWorker = null;
           return;
         }
 
-        activeWorker?.kill();
+        killActiveWorker(activeWorker);
         activeWorker = null;
         webviewPanel.title = preview.fileName;
         latestPreview = preview;
@@ -398,7 +481,7 @@ class SchematicViewerProvider {
         }
 
         latestPreview = null;
-        activeWorker?.kill();
+        killActiveWorker(activeWorker);
         activeWorker = null;
         pendingStatus = null;
         await webviewPanel.webview.postMessage({

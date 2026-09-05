@@ -102,6 +102,7 @@ let latestCompletedPreview = null;
 let activeRenderController = null;
 let lastRenderedRequestId = null;
 let isPanelVisible = true;
+let resourcesReady = false;
 
 const parseCssRgb = (value) => {
   if (typeof value !== 'string') {
@@ -260,7 +261,9 @@ const ensureResources = async () => {
   if (!resourcesPromise) {
     resourcesPromise = loadVsCodeThreeDBlocksResources(config.resourceBase);
   }
-  return resourcesPromise;
+  const resources = await resourcesPromise;
+  resourcesReady = true;
+  return resources;
 };
 
 const ensureRenderer = async () => {
@@ -340,7 +343,10 @@ const fitCameraToPreview = (preview) => {
 const renderPreview = async (preview, requestId = null) => {
   cancelActiveRender();
   updateSummary(preview);
-  showOverlay(strings.loadingResourcesTitle, strings.loadingResourcesMessage);
+
+  if (!renderer || !resourcesReady) {
+    showOverlay(strings.loadingResourcesTitle, strings.loadingResourcesMessage);
+  }
 
   const world = buildWorld(preview);
   const currentRenderer = await ensureRenderer();
