@@ -98,6 +98,10 @@ let interactiveCanvas = null;
 let resourcesPromise = null;
 let resizeObserver = null;
 let pendingPreview = null;
+let latestCompletedPreview = null;
+let activeRenderController = null;
+let lastRenderedRequestId = null;
+let isPanelVisible = true;
 
 const parseCssRgb = (value) => {
   if (typeof value !== 'string') {
@@ -239,6 +243,19 @@ const getBlocksPerSlice = (preview) => {
   return 5_000;
 };
 
+const isAbortError = (error) => (
+  error instanceof DOMException
+  ? error.name === 'AbortError'
+  : String(error?.name || '') === 'AbortError'
+);
+
+const cancelActiveRender = () => {
+  if (activeRenderController) {
+    activeRenderController.abort();
+    activeRenderController = null;
+  }
+};
+
 const ensureResources = async () => {
   if (!resourcesPromise) {
     resourcesPromise = loadVsCodeThreeDBlocksResources(config.resourceBase);
@@ -320,24 +337,31 @@ const fitCameraToPreview = (preview) => {
   );
 };
 
-const renderPreview = async (preview) => {
+const renderPreview = async (preview, requestId = null) => {
+  cancelActiveRender();
   updateSummary(preview);
   showOverlay(strings.loadingResourcesTitle, strings.loadingResourcesMessage);
 
   const world = buildWorld(preview);
   const currentRenderer = await ensureRenderer();
   const blocksPerSlice = getBlocksPerSlice(preview);
+  const renderController = new AbortController();
+  activeRenderController = renderController;
 
   showOverlay(strings.meshingTitle, strings.meshingMessage);
-  await currentRenderer.setStructureProgressiveAsync(world, blocksPerSlice, undefined, (built, total) => {
+  await currentRenderer.setStructureProgressiveAsync(world, blocksPerSlice, renderController.signal, (built, total) => {
     if (total > 0) {
       showOverlay(strings.meshingTitle, formatString(strings.meshingProgress, { built, total }));
     }
   });
+  if (activeRenderController === renderController) {
+    activeRenderController = null;
+  }
 
   fitCameraToPreview(preview);
   interactiveCanvas?.redraw();
   hideOverlay();
+  lastRenderedRequestId = requestId;
 
   vscode?.setState({
     fileName: preview.fileName,
@@ -352,12 +376,37 @@ window.addEventListener('resize', () => {
 window.addEventListener('message', async (event) => {
   const message = event.data;
 
+  if (message?.type === 'setVisibility') {
+    isPanelVisible = Boolean(message.visible);
+    if (!isPanelVisible) {
+      cancelActiveRender();
+      return;
+    }
+
+    if (latestCompletedPreview && latestCompletedPreview.requestId !== lastRenderedRequestId) {
+      try {
+        await renderPreview(latestCompletedPreview.preview, latestCompletedPreview.requestId);
+      } catch (error) {
+        if (!isAbortError(error)) {
+          const description = error instanceof Error ? error.message : String(error);
+          showOverlay(strings.previewFailedTitle, description, 'error');
+        }
+      }
+    } else {
+      interactiveCanvas?.redraw();
+    }
+    return;
+  }
+
   if (message?.type === 'setStatus') {
     showOverlay(message.title || strings.loadingTitle, message.message || strings.preparingRenderer);
     return;
   }
 
   if (message?.type === 'previewStart') {
+    cancelActiveRender();
+    latestCompletedPreview = null;
+    lastRenderedRequestId = null;
     pendingPreview = {
       requestId: message.requestId,
       preview: {
@@ -388,29 +437,43 @@ window.addEventListener('message', async (event) => {
     }
 
     const preview = pendingPreview.preview;
+    const requestId = pendingPreview.requestId;
     pendingPreview = null;
+    latestCompletedPreview = { requestId, preview };
+    if (!isPanelVisible) {
+      showOverlay(strings.loadingTitle, strings.preparingRenderer);
+      return;
+    }
     try {
-      await renderPreview(preview);
+      await renderPreview(preview, requestId);
     } catch (error) {
-      const description = error instanceof Error ? error.message : String(error);
-      showOverlay(strings.previewFailedTitle, description, 'error');
+      if (!isAbortError(error)) {
+        const description = error instanceof Error ? error.message : String(error);
+        showOverlay(strings.previewFailedTitle, description, 'error');
+      }
     }
     return;
   }
 
   if (message?.type === 'setPreview') {
     const preview = message.previewStr ? JSON.parse(message.previewStr) : message.preview;
+    latestCompletedPreview = { requestId: null, preview };
     try {
-      await renderPreview(preview);
+      await renderPreview(preview, null);
     } catch (error) {
-      const description = error instanceof Error ? error.message : String(error);
-      showOverlay(strings.previewFailedTitle, description, 'error');
+      if (!isAbortError(error)) {
+        const description = error instanceof Error ? error.message : String(error);
+        showOverlay(strings.previewFailedTitle, description, 'error');
+      }
     }
     return;
   }
 
   if (message?.type === 'setError') {
+    cancelActiveRender();
     pendingPreview = null;
+    latestCompletedPreview = null;
+    lastRenderedRequestId = null;
     showOverlay(strings.previewFailedTitle, message.message || strings.unknownError, 'error');
   }
 });

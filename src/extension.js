@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { Worker } from 'node:worker_threads';
+import { spawn } from 'node:child_process';
 import * as vscode from 'vscode';
 
 const VIEW_TYPE = 'minecraftSchematicViewer.viewer';
@@ -19,6 +19,8 @@ const LOCALE_STRINGS = {
     noNonAirMaterials: 'No non-air materials found.',
     loadingTitle: 'Loading…',
     preparingRenderer: 'Preparing renderer.',
+    readingFile: 'Reading schematic file.',
+    parsingStructure: 'Parsing structure data.',
     loadingResourcesTitle: 'Loading resources',
     loadingResourcesMessage: 'Preparing block models and textures.',
     meshingTitle: 'Meshing structure',
@@ -45,6 +47,8 @@ const LOCALE_STRINGS = {
     noNonAirMaterials: '未找到非空气方块。',
     loadingTitle: '加载中…',
     preparingRenderer: '正在准备渲染器。',
+    readingFile: '正在读取蓝图文件。',
+    parsingStructure: '正在解析结构数据。',
     loadingResourcesTitle: '正在加载资源',
     loadingResourcesMessage: '正在准备方块模型和纹理。',
     meshingTitle: '正在生成网格',
@@ -71,6 +75,8 @@ const LOCALE_STRINGS = {
     noNonAirMaterials: '空気以外の素材が見つかりません。',
     loadingTitle: '読み込み中…',
     preparingRenderer: 'レンダラーを準備しています。',
+    readingFile: '設計図ファイルを読み込んでいます。',
+    parsingStructure: '構造データを解析しています。',
     loadingResourcesTitle: 'リソースを読み込み中',
     loadingResourcesMessage: 'ブロックモデルとテクスチャを準備しています。',
     meshingTitle: '構造をメッシュ化中',
@@ -97,6 +103,8 @@ const LOCALE_STRINGS = {
     noNonAirMaterials: 'Aucun matériau non-air trouvé.',
     loadingTitle: 'Chargement…',
     preparingRenderer: 'Préparation du moteur de rendu.',
+    readingFile: 'Lecture du fichier de schéma.',
+    parsingStructure: 'Analyse des données de structure.',
     loadingResourcesTitle: 'Chargement des ressources',
     loadingResourcesMessage: 'Préparation des modèles de blocs et des textures.',
     meshingTitle: 'Maillage de la structure',
@@ -123,6 +131,8 @@ const LOCALE_STRINGS = {
     noNonAirMaterials: 'Keine Nicht-Luft-Materialien gefunden.',
     loadingTitle: 'Wird geladen…',
     preparingRenderer: 'Renderer wird vorbereitet.',
+    readingFile: 'Schemadatei wird gelesen.',
+    parsingStructure: 'Strukturdaten werden analysiert.',
     loadingResourcesTitle: 'Ressourcen werden geladen',
     loadingResourcesMessage: 'Blockmodelle und Texturen werden vorbereitet.',
     meshingTitle: 'Struktur wird vermascht',
@@ -149,6 +159,8 @@ const LOCALE_STRINGS = {
     noNonAirMaterials: 'No se encontraron materiales distintos del aire.',
     loadingTitle: 'Cargando…',
     preparingRenderer: 'Preparando el renderizador.',
+    readingFile: 'Leyendo el archivo esquemático.',
+    parsingStructure: 'Analizando los datos de la estructura.',
     loadingResourcesTitle: 'Cargando recursos',
     loadingResourcesMessage: 'Preparando modelos de bloques y texturas.',
     meshingTitle: 'Generando malla de la estructura',
@@ -184,36 +196,25 @@ const getNonce = () => {
   return value;
 };
 
-const PREVIEW_WORKER_SOURCE = `
-const { parentPort, workerData } = require('node:worker_threads');
-const { pathToFileURL } = require('node:url');
-
-(async () => {
-  const moduleUrl = pathToFileURL(workerData.modulePath).href;
-  const mod = await import(moduleUrl);
-  const preview = await mod.createPreviewData(workerData.fileName, workerData.bytes, { yieldInterval: 0 });
-  parentPort.postMessage({ type: 'result', preview });
-})().catch((error) => {
-  parentPort.postMessage({
-    type: 'error',
-    message: error instanceof Error ? error.message : String(error)
-  });
-});
-`;
-
-const startPreviewWorker = (extensionFsPath, fileName, fileBytes) => {
+const startPreviewWorker = (extensionFsPath, fileName) => {
+  const processPath = path.join(extensionFsPath, 'src', 'previewProcess.mjs');
   const modulePath = path.join(extensionFsPath, 'src', 'nbtPreview.js');
-  const workerBytes = fileBytes.byteOffset === 0 && fileBytes.byteLength === fileBytes.buffer.byteLength
-    ? fileBytes
-    : Uint8Array.from(fileBytes);
-  const worker = new Worker(PREVIEW_WORKER_SOURCE, {
-    eval: true,
-    workerData: {
-      modulePath,
-      fileName,
-      bytes: workerBytes
+  const worker = spawn(process.execPath, [processPath], {
+    env: {
+      ...process.env,
+      PREVIEW_FILE_NAME: fileName,
+      PREVIEW_MODULE_PATH: modulePath
     },
-    transferList: [workerBytes.buffer]
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  let stdout = '';
+  let stderr = '';
+
+  worker.stdout.on('data', (chunk) => {
+    stdout += chunk.toString();
+  });
+  worker.stderr.on('data', (chunk) => {
+    stderr += chunk.toString();
   });
 
   const result = new Promise((resolve, reject) => {
@@ -221,25 +222,35 @@ const startPreviewWorker = (extensionFsPath, fileName, fileBytes) => {
       worker.removeAllListeners();
     };
 
-    worker.once('message', (message) => {
-      cleanup();
-      if (message?.type === 'result') {
-        resolve(message.preview);
-        return;
-      }
-      reject(new Error(message?.message || 'Preview worker failed.'));
-    });
-
     worker.once('error', (error) => {
       cleanup();
       reject(error);
     });
 
-    worker.once('exit', (code) => {
+    worker.once('close', (code) => {
       cleanup();
-      if (code !== 0) {
-        reject(new Error(`Preview worker exited with code ${code}.`));
+
+      if (stdout) {
+        try {
+          const message = JSON.parse(stdout);
+          if (message?.type === 'result') {
+            resolve(message.preview);
+            return;
+          }
+          reject(new Error(message?.message || 'Preview worker failed.'));
+          return;
+        } catch (error) {
+          reject(new Error(`Preview worker emitted invalid JSON: ${error instanceof Error ? error.message : String(error)}`));
+          return;
+        }
       }
+
+      if (code !== 0) {
+        reject(new Error(stderr.trim() || `Preview worker exited with code ${code}.`));
+        return;
+      }
+
+      reject(new Error('Preview worker exited without a result payload.'));
     });
   });
 
@@ -276,16 +287,19 @@ class SchematicViewerProvider {
       new vscode.RelativePattern(folderUri, baseName)
     );
 
-    let latestPreviewStr = null;
     let latestPreview = null;
     let isWebviewReady = false;
+    let isPanelVisible = webviewPanel.visible;
     let activeLoadPromise = null;
     let activeLoadId = 0;
     let activeWorker = null;
+    let pendingStatus = null;
     let disposed = false;
 
     const postStatus = async (title, message) => {
-      if (!isWebviewReady || disposed) {
+      pendingStatus = { title, message };
+
+      if (!isWebviewReady || disposed || !isPanelVisible) {
         return;
       }
 
@@ -297,7 +311,7 @@ class SchematicViewerProvider {
     };
 
     const postPreviewChunks = async (preview, loadId) => {
-      if (!isWebviewReady || disposed || loadId !== activeLoadId) {
+      if (!isWebviewReady || disposed || !isPanelVisible || loadId !== activeLoadId) {
         return;
       }
 
@@ -337,34 +351,45 @@ class SchematicViewerProvider {
       });
     };
 
+    const cancelActiveLoad = () => {
+      activeLoadId += 1;
+      if (activeWorker) {
+        activeWorker.kill();
+        activeWorker = null;
+      }
+      activeLoadPromise = null;
+    };
+
     const postPreview = async () => {
       const loadId = ++activeLoadId;
       latestPreview = null;
-      latestPreviewStr = null;
 
       if (activeWorker) {
         activeWorker.terminate().catch(() => {});
         activeWorker = null;
       }
 
-      await postStatus(strings.loadingTitle, strings.preparingRenderer);
-
       try {
-        const bytes = await vscode.workspace.fs.readFile(document.uri);
-        const workerJob = startPreviewWorker(this.extensionUri.fsPath, document.uri.fsPath, bytes);
+        await postStatus(strings.loadingTitle, strings.readingFile);
+        const fileInfo = await vscode.workspace.fs.stat(document.uri);
+        if (disposed || !isPanelVisible || loadId !== activeLoadId) {
+          return;
+        }
+        await postStatus(strings.loadingTitle, strings.parsingStructure);
+        const workerJob = startPreviewWorker(this.extensionUri.fsPath, document.uri.fsPath);
         activeWorker = workerJob.worker;
         const preview = await workerJob.result;
         if (disposed || loadId !== activeLoadId) {
-          activeWorker?.terminate().catch(() => {});
+          activeWorker?.kill();
           activeWorker = null;
           return;
         }
 
-        activeWorker?.terminate().catch(() => {});
+        activeWorker?.kill();
         activeWorker = null;
         webviewPanel.title = preview.fileName;
         latestPreview = preview;
-        latestPreviewStr = JSON.stringify(preview);
+        pendingStatus = null;
         await postPreviewChunks(preview, loadId);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -372,10 +397,10 @@ class SchematicViewerProvider {
           return;
         }
 
-        latestPreviewStr = null;
         latestPreview = null;
-        activeWorker?.terminate().catch(() => {});
+        activeWorker?.kill();
         activeWorker = null;
+        pendingStatus = null;
         await webviewPanel.webview.postMessage({
           type: 'setError',
           message
@@ -403,27 +428,52 @@ class SchematicViewerProvider {
     });
     watcher.onDidDelete(async () => {
       latestPreview = null;
-      latestPreviewStr = null;
       await webviewPanel.webview.postMessage({
         type: 'setError',
         message: strings.fileDeleted
       });
     });
 
+    webviewPanel.onDidChangeViewState((event) => {
+      isPanelVisible = event.webviewPanel.visible;
+      if (!isWebviewReady || disposed) {
+        return;
+      }
+
+      void webviewPanel.webview.postMessage({
+        type: 'setVisibility',
+        visible: isPanelVisible
+      });
+
+      if (!isPanelVisible) {
+        cancelActiveLoad();
+        return;
+      }
+
+      if (pendingStatus) {
+        void postStatus(pendingStatus.title, pendingStatus.message);
+      } else if (latestPreview === null) {
+        void ensurePreviewPosted();
+      }
+    });
+
     webviewPanel.onDidDispose(() => {
       disposed = true;
-      if (activeWorker) {
-        activeWorker.terminate().catch(() => {});
-        activeWorker = null;
-      }
+      cancelActiveLoad();
       watcher.dispose();
     });
 
     webviewPanel.webview.onDidReceiveMessage((message) => {
       if (message.type === 'ready') {
         isWebviewReady = true;
+        void webviewPanel.webview.postMessage({
+          type: 'setVisibility',
+          visible: isPanelVisible
+        });
         if (latestPreview !== null) {
           void postPreviewChunks(latestPreview, activeLoadId);
+        } else if (pendingStatus) {
+          void postStatus(pendingStatus.title, pendingStatus.message);
         } else if (!activeLoadPromise) {
           void ensurePreviewPosted();
         }
