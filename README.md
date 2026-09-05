@@ -1,6 +1,14 @@
 # Minecraft Schematic Viewer for VS Code
 
-Visual Studio Code extension previews Minecraft `.litematic` and WorldEdit `.schem` files directly in an editor tab.
+Visual Studio Code extension previews Minecraft schematic files directly in an editor tab.
+
+Currently supported formats:
+
+- `.litematic`
+- `.schem`
+- `.nbt`
+- `.mcstructure`
+- Building Gadgets `.json`
 
 
 ![Demo](figs/demo.png)
@@ -10,7 +18,12 @@ Get it by simply searching **Minecraft Schematic Viewer** in your extensions tab
 
 ## Usage
 
-Open a `.litematic` or `.schem` file in VS Code, and the extension will preview the schematic in a new tab. Use your mouse to navigate the schematic, and use the scroll wheel to zoom in and out. Use wasd or arrow keys to pan the camera.
+Open a supported schematic file in VS Code, and the extension will preview it in a new tab.
+
+- `.litematic`, `.schem`, `.nbt`, and `.mcstructure` open directly with the viewer.
+- Building Gadgets `.json` files are available through **Reopen With...** / **Open With...** so the extension does not take over regular JSON editing.
+
+Use your mouse to navigate the schematic, and use the scroll wheel to zoom in and out. Use `WASD` or arrow keys to pan the camera.
 
 ## Development
 
@@ -19,6 +32,8 @@ Run this command from the extension project folder:
 ```bash
 npm run build
 ```
+
+This builds both the extension host bundle and the webview bundle into `dist/`.
 
 
 ## License

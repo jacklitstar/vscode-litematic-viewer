@@ -1,6 +1,6 @@
 {
   "displayName": "Visor de esquemas de Minecraft",
-  "description": "Previsualiza archivos .litematic y .schem en una pestaña del editor de VS Code.",
+  "description": "Previsualiza archivos de esquemas de Minecraft en una pestaña del editor de VS Code.",
   "customEditor.displayName": "Visor de esquemas de Minecraft",
   "command.openActiveFile.title": "Visor de esquemas de Minecraft: Abrir archivo activo"
 }

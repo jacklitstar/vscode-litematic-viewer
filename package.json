@@ -2,7 +2,7 @@
   "name": "minecraft-schematic-viewer",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "publisher": "jacklitstar",
   "repository": {
     "type": "git",
@@ -23,13 +23,17 @@
   ],
   "keywords": [
     "minecraft",
+    "nbt",
     "litematic",
     "schem",
+    "mcstructure",
+    "building gadgets",
     "schematic",
     "viewer"
   ],
   "activationEvents": [
-    "onCustomEditor:minecraftSchematicViewer.viewer"
+    "onCustomEditor:minecraftSchematicViewer.viewer",
+    "onCommand:minecraftSchematicViewer.openActiveFile"
   ],
   "main": "./dist/extension.cjs",
   "dependencies": {
@@ -51,9 +55,25 @@
           },
           {
             "filenamePattern": "*.schem"
+          },
+          {
+            "filenamePattern": "*.nbt"
+          },
+          {
+            "filenamePattern": "*.mcstructure"
           }
         ],
         "priority": "default"
+      },
+      {
+        "viewType": "minecraftSchematicViewer.viewer",
+        "displayName": "%customEditor.displayName%",
+        "selector": [
+          {
+            "filenamePattern": "*.json"
+          }
+        ],
+        "priority": "option"
       }
     ],
     "commands": [
@@ -73,6 +93,7 @@
     "dist/**",
     "node_modules/**",
     "resources/**",
+    "src/**",
     "vendor/**",
     "LICENSE",
     "NOTICE",

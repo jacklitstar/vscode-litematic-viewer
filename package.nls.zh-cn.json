@@ -1,6 +1,6 @@
 {
   "displayName": "我的世界投影查看器",
-  "description": "在 VS Code 编辑器标签页中预览 .litematic 和 .schem 文件。",
+  "description": "在 VS Code 编辑器标签页中预览 Minecraft 蓝图文件。",
   "customEditor.displayName": "我的世界投影查看器",
   "command.openActiveFile.title": "我的世界投影查看器：打开当前文件"
 }

@@ -1,9 +1,10 @@
 import path from 'node:path';
+import { Worker } from 'node:worker_threads';
 import * as vscode from 'vscode';
-import { createPreviewData } from './nbtPreview.js';
 
 const VIEW_TYPE = 'minecraftSchematicViewer.viewer';
 const DEFAULT_LOCALE = 'en';
+const PREVIEW_BLOCK_CHUNK_SIZE = 100_000;
 const LOCALE_STRINGS = {
   en: {
     editorTitle: 'Minecraft Schematic Viewer',
@@ -26,7 +27,7 @@ const LOCALE_STRINGS = {
     previewFailedTitle: 'Preview failed',
     unknownError: 'Unknown error.',
     waitingTitle: 'Waiting for preview',
-    waitingMessage: 'Open a .litematic or .schem file to render it here.',
+    waitingMessage: 'Open a .litematic, .schem, .nbt, .mcstructure, or supported .json schematic file to render it here.',
     webglUnavailable: 'WebGL is not available in this VS Code webview.',
     fileDeleted: 'The schematic file was deleted from disk.',
     noActiveFile: 'No active file is available to preview.'
@@ -52,7 +53,7 @@ const LOCALE_STRINGS = {
     previewFailedTitle: '预览失败',
     unknownError: '未知错误。',
     waitingTitle: '等待预览',
-    waitingMessage: '打开 .litematic 或 .schem 文件以在此处渲染。',
+    waitingMessage: '打开 .litematic、.schem、.nbt、.mcstructure 或受支持的 .json 蓝图文件以在此处渲染。',
     webglUnavailable: '此 VS Code Webview 中无法使用 WebGL。',
     fileDeleted: '结构文件已从磁盘中删除。',
     noActiveFile: '当前没有可预览的活动文件。'
@@ -78,7 +79,7 @@ const LOCALE_STRINGS = {
     previewFailedTitle: 'プレビューに失敗しました',
     unknownError: '不明なエラーです。',
     waitingTitle: 'プレビュー待機中',
-    waitingMessage: '.litematic または .schem ファイルを開くとここに表示されます。',
+    waitingMessage: '.litematic、.schem、.nbt、.mcstructure、または対応する .json 設計図ファイルを開くとここに表示されます。',
     webglUnavailable: 'この VS Code Webview では WebGL を利用できません。',
     fileDeleted: 'スキーマティックファイルがディスクから削除されました。',
     noActiveFile: 'プレビューできるアクティブファイルがありません。'
@@ -104,7 +105,7 @@ const LOCALE_STRINGS = {
     previewFailedTitle: 'Échec de l’aperçu',
     unknownError: 'Erreur inconnue.',
     waitingTitle: 'En attente de l’aperçu',
-    waitingMessage: 'Ouvrez un fichier .litematic ou .schem pour l’afficher ici.',
+    waitingMessage: 'Ouvrez un fichier .litematic, .schem, .nbt, .mcstructure ou un schéma .json pris en charge pour l’afficher ici.',
     webglUnavailable: 'WebGL n’est pas disponible dans cette Webview VS Code.',
     fileDeleted: 'Le fichier du schéma a été supprimé du disque.',
     noActiveFile: 'Aucun fichier actif disponible pour l’aperçu.'
@@ -130,7 +131,7 @@ const LOCALE_STRINGS = {
     previewFailedTitle: 'Vorschau fehlgeschlagen',
     unknownError: 'Unbekannter Fehler.',
     waitingTitle: 'Warten auf Vorschau',
-    waitingMessage: 'Öffnen Sie eine .litematic- oder .schem-Datei, um sie hier darzustellen.',
+    waitingMessage: 'Öffnen Sie eine .litematic-, .schem-, .nbt-, .mcstructure- oder unterstützte .json-Datei, um sie hier darzustellen.',
     webglUnavailable: 'WebGL ist in dieser VS Code-Webview nicht verfügbar.',
     fileDeleted: 'Die Schemadatei wurde vom Datenträger gelöscht.',
     noActiveFile: 'Keine aktive Datei zur Vorschau verfügbar.'
@@ -156,7 +157,7 @@ const LOCALE_STRINGS = {
     previewFailedTitle: 'Error en la vista previa',
     unknownError: 'Error desconocido.',
     waitingTitle: 'Esperando vista previa',
-    waitingMessage: 'Abre un archivo .litematic o .schem para renderizarlo aquí.',
+    waitingMessage: 'Abre un archivo .litematic, .schem, .nbt, .mcstructure o un esquema .json compatible para renderizarlo aquí.',
     webglUnavailable: 'WebGL no está disponible en esta Webview de VS Code.',
     fileDeleted: 'El archivo esquemático fue eliminado del disco.',
     noActiveFile: 'No hay ningún archivo activo disponible para previsualizar.'
@@ -181,6 +182,68 @@ const getNonce = () => {
     value += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
   }
   return value;
+};
+
+const PREVIEW_WORKER_SOURCE = `
+const { parentPort, workerData } = require('node:worker_threads');
+const { pathToFileURL } = require('node:url');
+
+(async () => {
+  const moduleUrl = pathToFileURL(workerData.modulePath).href;
+  const mod = await import(moduleUrl);
+  const preview = await mod.createPreviewData(workerData.fileName, workerData.bytes, { yieldInterval: 0 });
+  parentPort.postMessage({ type: 'result', preview });
+})().catch((error) => {
+  parentPort.postMessage({
+    type: 'error',
+    message: error instanceof Error ? error.message : String(error)
+  });
+});
+`;
+
+const startPreviewWorker = (extensionFsPath, fileName, fileBytes) => {
+  const modulePath = path.join(extensionFsPath, 'src', 'nbtPreview.js');
+  const workerBytes = fileBytes.byteOffset === 0 && fileBytes.byteLength === fileBytes.buffer.byteLength
+    ? fileBytes
+    : Uint8Array.from(fileBytes);
+  const worker = new Worker(PREVIEW_WORKER_SOURCE, {
+    eval: true,
+    workerData: {
+      modulePath,
+      fileName,
+      bytes: workerBytes
+    },
+    transferList: [workerBytes.buffer]
+  });
+
+  const result = new Promise((resolve, reject) => {
+    const cleanup = () => {
+      worker.removeAllListeners();
+    };
+
+    worker.once('message', (message) => {
+      cleanup();
+      if (message?.type === 'result') {
+        resolve(message.preview);
+        return;
+      }
+      reject(new Error(message?.message || 'Preview worker failed.'));
+    });
+
+    worker.once('error', (error) => {
+      cleanup();
+      reject(error);
+    });
+
+    worker.once('exit', (code) => {
+      cleanup();
+      if (code !== 0) {
+        reject(new Error(`Preview worker exited with code ${code}.`));
+      }
+    });
+  });
+
+  return { worker, result };
 };
 
 class SchematicViewerProvider {
@@ -214,57 +277,160 @@ class SchematicViewerProvider {
     );
 
     let latestPreviewStr = null;
+    let latestPreview = null;
+    let isWebviewReady = false;
+    let activeLoadPromise = null;
+    let activeLoadId = 0;
+    let activeWorker = null;
+    let disposed = false;
+
+    const postStatus = async (title, message) => {
+      if (!isWebviewReady || disposed) {
+        return;
+      }
+
+      await webviewPanel.webview.postMessage({
+        type: 'setStatus',
+        title,
+        message
+      });
+    };
+
+    const postPreviewChunks = async (preview, loadId) => {
+      if (!isWebviewReady || disposed || loadId !== activeLoadId) {
+        return;
+      }
+
+      const { blocks, ...previewMeta } = preview;
+      const totalBlocks = Array.isArray(blocks) ? blocks.length : 0;
+      const totalChunks = Math.max(1, Math.ceil(totalBlocks / PREVIEW_BLOCK_CHUNK_SIZE));
+
+      await webviewPanel.webview.postMessage({
+        type: 'previewStart',
+        requestId: loadId,
+        preview: previewMeta,
+        totalBlocks,
+        totalChunks
+      });
+
+      for (let offset = 0, chunkIndex = 0; offset < totalBlocks; offset += PREVIEW_BLOCK_CHUNK_SIZE, chunkIndex += 1) {
+        if (disposed || loadId !== activeLoadId) {
+          return;
+        }
+
+        await webviewPanel.webview.postMessage({
+          type: 'previewChunk',
+          requestId: loadId,
+          chunkIndex,
+          totalChunks,
+          blocks: blocks.slice(offset, offset + PREVIEW_BLOCK_CHUNK_SIZE)
+        });
+      }
+
+      if (disposed || loadId !== activeLoadId) {
+        return;
+      }
+
+      await webviewPanel.webview.postMessage({
+        type: 'previewEnd',
+        requestId: loadId
+      });
+    };
 
     const postPreview = async () => {
+      const loadId = ++activeLoadId;
+      latestPreview = null;
+      latestPreviewStr = null;
+
+      if (activeWorker) {
+        activeWorker.terminate().catch(() => {});
+        activeWorker = null;
+      }
+
+      await postStatus(strings.loadingTitle, strings.preparingRenderer);
+
       try {
         const bytes = await vscode.workspace.fs.readFile(document.uri);
-        const preview = await createPreviewData(document.uri.fsPath, bytes);
+        const workerJob = startPreviewWorker(this.extensionUri.fsPath, document.uri.fsPath, bytes);
+        activeWorker = workerJob.worker;
+        const preview = await workerJob.result;
+        if (disposed || loadId !== activeLoadId) {
+          activeWorker?.terminate().catch(() => {});
+          activeWorker = null;
+          return;
+        }
+
+        activeWorker?.terminate().catch(() => {});
+        activeWorker = null;
         webviewPanel.title = preview.fileName;
-        const safePreview = JSON.stringify(preview);
-        latestPreviewStr = safePreview;
-        webviewPanel.webview.postMessage({
-          type: 'setPreview',
-          previewStr: safePreview
-        });
+        latestPreview = preview;
+        latestPreviewStr = JSON.stringify(preview);
+        await postPreviewChunks(preview, loadId);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        if (disposed || loadId !== activeLoadId) {
+          return;
+        }
+
         latestPreviewStr = null;
-        webviewPanel.webview.postMessage({
+        latestPreview = null;
+        activeWorker?.terminate().catch(() => {});
+        activeWorker = null;
+        await webviewPanel.webview.postMessage({
           type: 'setError',
           message
         });
+      } finally {
+        if (loadId === activeLoadId) {
+          activeLoadPromise = null;
+        }
       }
     };
 
-    watcher.onDidChange(postPreview);
-    watcher.onDidCreate(postPreview);
+    const ensurePreviewPosted = () => {
+      if (activeLoadPromise) {
+        return activeLoadPromise;
+      }
+      activeLoadPromise = postPreview();
+      return activeLoadPromise;
+    };
+
+    watcher.onDidChange(() => {
+      void ensurePreviewPosted();
+    });
+    watcher.onDidCreate(() => {
+      void ensurePreviewPosted();
+    });
     watcher.onDidDelete(async () => {
+      latestPreview = null;
+      latestPreviewStr = null;
       await webviewPanel.webview.postMessage({
         type: 'setError',
         message: strings.fileDeleted
       });
     });
 
-    webviewPanel.onDidDispose(() => watcher.dispose());
+    webviewPanel.onDidDispose(() => {
+      disposed = true;
+      if (activeWorker) {
+        activeWorker.terminate().catch(() => {});
+        activeWorker = null;
+      }
+      watcher.dispose();
+    });
 
     webviewPanel.webview.onDidReceiveMessage((message) => {
       if (message.type === 'ready') {
-        // The webview has registered its message listener; (re)send the preview.
-        if (latestPreviewStr !== null) {
-          webviewPanel.webview.postMessage({
-            type: 'setPreview',
-            previewStr: latestPreviewStr
-          });
-        } else {
-          postPreview();
+        isWebviewReady = true;
+        if (latestPreview !== null) {
+          void postPreviewChunks(latestPreview, activeLoadId);
+        } else if (!activeLoadPromise) {
+          void ensurePreviewPosted();
         }
       }
     });
 
-    // Do not await: postMessage only resolves once the webview is listening, so
-    // awaiting here would block resolveCustomEditor and leave the native editor
-    // stuck on its loading indicator. The 'ready' handshake delivers the preview.
-    postPreview();
+    void ensurePreviewPosted();
   }
 
   getHtml(webview, localeKey, strings) {

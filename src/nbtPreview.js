@@ -1,7 +1,10 @@
 import path from 'node:path';
+import { gunzipSync } from 'node:zlib';
 import * as nbt from 'prismarine-nbt';
+import { NbtCompound } from 'deepslate/nbt';
+import { StringReader } from 'deepslate/util';
 
-const AIR_IDS = new Set(['air', 'minecraft:air']);
+const AIR_IDS = new Set(['air', 'minecraft:air', 'minecraft:structure_void']);
 
 const AIR_STATE = Object.freeze({
   id: 'minecraft:air',
@@ -26,9 +29,11 @@ const toPositiveSize = (value, fallback = 0) => Math.abs(toInt(value, fallback))
 
 const isAirId = (id) => AIR_IDS.has(String(id || '').toLowerCase());
 
+const hasGzipHeader = (buffer) => buffer?.[0] === 0x1f && buffer?.[1] === 0x8b;
+
 const normalizeProperties = (properties = {}) => {
   const normalized = {};
-  for (const [key, value] of Object.entries(properties)) {
+  for (const [key, value] of Object.entries(properties || {})) {
     if (value !== undefined && value !== null) {
       normalized[key] = String(value);
     }
@@ -51,12 +56,12 @@ const cloneState = (state) => ({
 });
 
 const parsePaletteStateEntry = (entry) => {
-  const nameState = parseBlockStateString(String(entry?.Name || 'minecraft:air'));
+  const nameState = parseBlockStateString(String(entry?.Name || entry?.name || 'minecraft:air'));
   return {
     id: nameState.id,
     properties: {
       ...nameState.properties,
-      ...normalizeProperties(entry?.Properties || {})
+      ...normalizeProperties(entry?.Properties || entry?.properties || entry?.states || {})
     }
   };
 };
@@ -94,6 +99,23 @@ const parseBlockStateString = (value) => {
   };
 };
 
+const readBlockPos = (value) => {
+  if (Array.isArray(value)) {
+    const [x = 0, y = 0, z = 0] = value;
+    return { x: toInt(x), y: toInt(y), z: toInt(z) };
+  }
+
+  if (value && typeof value === 'object') {
+    return {
+      x: toInt(value.x ?? value.X ?? value.minX ?? 0),
+      y: toInt(value.y ?? value.Y ?? value.minY ?? 0),
+      z: toInt(value.z ?? value.Z ?? value.minZ ?? 0)
+    };
+  }
+
+  return { x: 0, y: 0, z: 0 };
+};
+
 const getPackedValue = (longArray, index, bits) => {
   if (!Array.isArray(longArray) || longArray.length === 0) {
     return 0;
@@ -104,9 +126,6 @@ const getPackedValue = (longArray, index, bits) => {
   const endArrayIndex = Number(((BigInt(index + 1) * BigInt(bits)) - 1n) >> 6n);
   const startBitOffset = Number(startOffset & 63n);
   const maxEntryValue = (1n << BigInt(bits)) - 1n;
-  // NBT long arrays are signed 64-bit values, but block-state packing treats
-  // each entry as an unsigned 64-bit word. Sign-extending negative values here
-  // corrupts palette indices and makes blocks disappear seemingly at random.
   const firstPart = BigInt.asUintN(64, BigInt(longArray[startArrayIndex] ?? 0n));
 
   if (startArrayIndex === endArrayIndex) {
@@ -150,6 +169,45 @@ const decodeVarIntArray = (source) => {
 
   return result;
 };
+
+const parseCompressedOrRawNbt = (fileBytes, format = 'big') => {
+  const original = Buffer.from(fileBytes);
+  const buffer = hasGzipHeader(original) ? gunzipSync(original) : original;
+  const parsed = nbt.parseUncompressed(buffer, format, { noArraySizeCheck: true });
+  return nbt.simplify(parsed);
+};
+
+const parseSnbt = (source) => {
+  const reader = new StringReader(String(source || ''));
+  return NbtCompound.fromString(reader).toSimplifiedJson();
+};
+
+const signedByte = (value) => {
+  const normalized = Number(value) & 0xff;
+  return normalized > 127 ? normalized - 256 : normalized;
+};
+
+const decodeBgRelativePosInt = (value) => ({
+  x: signedByte(value >> 16),
+  y: signedByte(value >> 8),
+  z: signedByte(value)
+});
+
+const decodeBgSerializedPos = (value) => {
+  const serialized = BigInt(value);
+  const signExtend16 = (part) => {
+    const normalized = Number(part & 0xffffn);
+    return normalized > 0x7fff ? normalized - 0x10000 : normalized;
+  };
+
+  return {
+    x: signExtend16(serialized >> 24n),
+    y: Number((serialized >> 16n) & 0xffn),
+    z: signExtend16(serialized)
+  };
+};
+
+const decodeBgSerializedStateId = (value) => Number((BigInt(value) >> 40n) & 0xffffffn);
 
 const createCollector = () => {
   const palette = [];
@@ -207,9 +265,17 @@ const createCollector = () => {
             length: defaultLength
           };
 
+      const originX = hasBlocks ? minX : 0;
+      const originY = hasBlocks ? minY : 0;
+      const originZ = hasBlocks ? minZ : 0;
       const flatBlocks = [];
       for (const block of blocks) {
-        flatBlocks.push(block.x - minX, block.y - minY, block.z - minZ, block.paletteIndex);
+        flatBlocks.push(
+          block.x - originX,
+          block.y - originY,
+          block.z - originZ,
+          block.paletteIndex
+        );
       }
 
       const sortedMaterials = Array.from(materials.entries())
@@ -259,20 +325,24 @@ const parseLitematicPreview = (root, fileName) => {
     }
 
     const bits = Math.max(2, Math.ceil(Math.log2(Math.max(1, regionPalette.length))));
+    const totalBlocks = width * height * length;
 
-    for (let y = 0; y < height; y += 1) {
-      for (let z = 0; z < length; z += 1) {
-        for (let x = 0; x < width; x += 1) {
-          const paletteIndex = getPackedValue(regionBlockStates, y * width * length + z * width + x, bits);
-          const state = regionPalette[paletteIndex] || AIR_STATE;
-          collector.addBlock(
-            x + toInt(position.x),
-            y + toInt(position.y),
-            z + toInt(position.z),
-            state
-          );
-        }
+    for (let index = 0; index < totalBlocks; index += 1) {
+      const paletteIndex = getPackedValue(regionBlockStates, index, bits);
+      if (paletteIndex === 0 && isAirId(regionPalette[0]?.id)) {
+        continue;
       }
+
+      const y = Math.floor(index / (width * length));
+      const z = Math.floor((index % (width * length)) / width);
+      const x = index % width;
+      const state = regionPalette[paletteIndex] || AIR_STATE;
+      collector.addBlock(
+        x + toInt(position.x),
+        y + toInt(position.y),
+        z + toInt(position.z),
+        state
+      );
     }
   }
 
@@ -330,18 +400,210 @@ const parseSchemPreview = (root, fileName) => {
   });
 };
 
-export const createPreviewData = async (fileName, fileBytes) => {
+const parseStructureNbtPreview = (root, fileName) => {
+  const blocks = Array.isArray(root?.blocks) ? root.blocks : [];
+  const palette = Array.isArray(root?.palette) ? root.palette.map(parsePaletteStateEntry) : [];
+  const sizeList = Array.isArray(root?.size) ? root.size : [];
+  const collector = createCollector();
+
+  for (const block of blocks) {
+    const pos = readBlockPos(block?.pos);
+    const state = palette[toInt(block?.state, -1)] || AIR_STATE;
+    collector.addBlock(pos.x, pos.y, pos.z, state);
+  }
+
+  return collector.finalize({
+    fileName,
+    format: 'nbt',
+    declaredSize: {
+      width: sizeList[0],
+      height: sizeList[1],
+      length: sizeList[2]
+    }
+  });
+};
+
+const parseMcstructurePreview = (root, fileName) => {
+  const sizeList = Array.isArray(root?.size) ? root.size : [];
+  const structure = root?.structure || {};
+  const palette = Array.isArray(structure?.palette?.default?.block_palette)
+    ? structure.palette.default.block_palette.map(parsePaletteStateEntry)
+    : [];
+  const blockIndices = Array.isArray(structure?.block_indices) ? structure.block_indices : [];
+  const layer0 = Array.isArray(blockIndices[0]) ? blockIndices[0] : [];
+  const size = {
+    width: Math.max(1, toPositiveSize(sizeList[0], 1)),
+    height: Math.max(1, toPositiveSize(sizeList[1], 1)),
+    length: Math.max(1, toPositiveSize(sizeList[2], 1))
+  };
+  const collector = createCollector();
+
+  for (let index = 0; index < layer0.length; index += 1) {
+    const paletteIndex = toInt(layer0[index], -1);
+    if (paletteIndex < 0) {
+      continue;
+    }
+
+    const z = index % size.length;
+    const y = Math.floor(index / size.length) % size.height;
+    const x = Math.floor(index / (size.length * size.height));
+    collector.addBlock(x, y, z, palette[paletteIndex] || AIR_STATE);
+  }
+
+  return collector.finalize({
+    fileName,
+    format: 'mcstructure',
+    declaredSize: size
+  });
+};
+
+const parseBgType0Preview = (root, fileName) => {
+  const palette = Array.isArray(root?.blockstatemap) ? root.blockstatemap.map(parsePaletteStateEntry) : [];
+  const stateList = Array.isArray(root?.statelist) ? root.statelist : [];
+  const startPos = readBlockPos(root?.startpos);
+  const endPos = readBlockPos(root?.endpos);
+  const declaredSize = {
+    width: Math.abs(endPos.x - startPos.x) + 1,
+    height: Math.abs(endPos.y - startPos.y) + 1,
+    length: Math.abs(endPos.z - startPos.z) + 1
+  };
+  const collector = createCollector();
+  let counter = 0;
+
+  for (let z = 0; z < declaredSize.length; z += 1) {
+    for (let y = 0; y < declaredSize.height; y += 1) {
+      for (let x = 0; x < declaredSize.width; x += 1) {
+        const state = palette[toInt(stateList[counter], -1)] || AIR_STATE;
+        counter += 1;
+        collector.addBlock(x, y, z, state);
+      }
+    }
+  }
+
+  return collector.finalize({
+    fileName,
+    format: 'json',
+    declaredSize
+  });
+};
+
+const parseBgType1Preview = (root, fileName) => {
+  const bounds = root?.header?.bounds || root?.header || {};
+  const minPos = {
+    x: toInt(bounds.minX, 0),
+    y: toInt(bounds.minY, 0),
+    z: toInt(bounds.minZ, 0)
+  };
+  const maxPos = {
+    x: toInt(bounds.maxX, minPos.x),
+    y: toInt(bounds.maxY, minPos.y),
+    z: toInt(bounds.maxZ, minPos.z)
+  };
+  const declaredSize = {
+    width: Math.abs(maxPos.x - minPos.x) + 1,
+    height: Math.abs(maxPos.y - minPos.y) + 1,
+    length: Math.abs(maxPos.z - minPos.z) + 1
+  };
+  const palette = Array.isArray(root?.data) ? root.data.map((entry) => parsePaletteStateEntry(entry?.state || {})) : [];
+  const positions = Array.isArray(root?.pos) ? root.pos : [];
+  const collector = createCollector();
+
+  for (const serialized of positions) {
+    const pos = decodeBgSerializedPos(serialized);
+    const state = palette[decodeBgSerializedStateId(serialized)] || AIR_STATE;
+    collector.addBlock(pos.x, pos.y, pos.z, state);
+  }
+
+  return collector.finalize({
+    fileName,
+    format: 'json',
+    declaredSize
+  });
+};
+
+const parseBgType2Preview = (root, fileName) => {
+  const startPos = readBlockPos(root?.startPos);
+  const endPos = readBlockPos(root?.endPos);
+  const declaredSize = {
+    width: Math.abs(endPos.x - startPos.x) + 1,
+    height: Math.abs(endPos.y - startPos.y) + 1,
+    length: Math.abs(endPos.z - startPos.z) + 1
+  };
+  const palette = Array.isArray(root?.mapIntState)
+    ? root.mapIntState.map((entry) => parsePaletteStateEntry(entry?.mapState || {}))
+    : [];
+  const stateInts = Array.isArray(root?.stateIntArray) ? root.stateIntArray : [];
+  const posInts = Array.isArray(root?.posIntArray) ? root.posIntArray : [];
+  const collector = createCollector();
+
+  for (let index = 0; index < stateInts.length; index += 1) {
+    const paletteIndex = toInt(stateInts[index], 0) - 1;
+    const pos = decodeBgRelativePosInt(toInt(posInts[index], 0));
+    collector.addBlock(pos.x, pos.y, pos.z, palette[paletteIndex] || AIR_STATE);
+  }
+
+  return collector.finalize({
+    fileName,
+    format: 'json',
+    declaredSize
+  });
+};
+
+const parseBuildingGadgetsPreview = (fileBytes, fileName) => {
+  const jsonSource = Buffer.from(fileBytes).toString('utf8');
+  let jsonRoot = null;
+
+  try {
+    jsonRoot = JSON.parse(jsonSource);
+  } catch {
+    jsonRoot = null;
+  }
+
+  if (jsonRoot?.statePosArrayList) {
+    return parseBgType0Preview(parseSnbt(jsonRoot.statePosArrayList), fileName);
+  }
+
+  if (typeof jsonRoot?.body === 'string') {
+    const bodyRoot = parseCompressedOrRawNbt(Buffer.from(jsonRoot.body, 'base64'), 'big');
+    return parseBgType1Preview(bodyRoot, fileName);
+  }
+
+  const snbtRoot = parseSnbt(jsonSource);
+
+  if (typeof snbtRoot?.body === 'string') {
+    const bodyRoot = parseCompressedOrRawNbt(Buffer.from(snbtRoot.body, 'base64'), 'big');
+    return parseBgType1Preview(bodyRoot, fileName);
+  }
+
+  if (Array.isArray(snbtRoot?.mapIntState)) {
+    return parseBgType2Preview(snbtRoot, fileName);
+  }
+
+  throw new Error('Unsupported Building Gadgets JSON format.');
+};
+
+export const createPreviewData = async (fileName, fileBytes, _options = {}) => {
   const ext = path.extname(fileName).toLowerCase();
-  const buffer = Buffer.from(fileBytes);
-  const { parsed } = await nbt.parse(buffer, 'big');
-  const root = nbt.simplify(parsed);
+  const baseName = path.basename(fileName);
 
   if (ext === '.litematic') {
-    return parseLitematicPreview(root, path.basename(fileName));
+    return parseLitematicPreview(parseCompressedOrRawNbt(fileBytes, 'big'), baseName);
   }
 
   if (ext === '.schem') {
-    return parseSchemPreview(root, path.basename(fileName));
+    return parseSchemPreview(parseCompressedOrRawNbt(fileBytes, 'big'), baseName);
+  }
+
+  if (ext === '.nbt') {
+    return parseStructureNbtPreview(parseCompressedOrRawNbt(fileBytes, 'big'), baseName);
+  }
+
+  if (ext === '.mcstructure') {
+    return parseMcstructurePreview(parseCompressedOrRawNbt(fileBytes, 'little'), baseName);
+  }
+
+  if (ext === '.json') {
+    return parseBuildingGadgetsPreview(fileBytes, baseName);
   }
 
   throw new Error(`Unsupported schematic extension: ${ext}`);

@@ -38,7 +38,7 @@ const strings = {
   previewFailedTitle: 'Preview failed',
   unknownError: 'Unknown error.',
   waitingTitle: 'Waiting for preview',
-  waitingMessage: 'Open a .litematic or .schem file to render it here.',
+  waitingMessage: 'Open a .litematic, .schem, .nbt, .mcstructure, or supported .json schematic file to render it here.',
   webglUnavailable: 'WebGL is not available in this VS Code webview.',
   ...config.strings
 };
@@ -97,6 +97,7 @@ let renderer = null;
 let interactiveCanvas = null;
 let resourcesPromise = null;
 let resizeObserver = null;
+let pendingPreview = null;
 
 const parseCssRgb = (value) => {
   if (typeof value !== 'string') {
@@ -191,16 +192,20 @@ const buildWorld = (preview) => {
     Math.max(1, preview.size.height),
     Math.max(1, preview.size.length)
   ]);
-  const stateByPosition = new Map();
+  const hasDoors = Array.isArray(preview.palette)
+    && preview.palette.some((state) => /_door$/.test(String(state?.id || '')));
+  const stateByPosition = hasDoors ? new Map() : null;
 
-  for (let index = 0; index < preview.blocks.length; index += 4) {
-    const x = preview.blocks[index];
-    const y = preview.blocks[index + 1];
-    const z = preview.blocks[index + 2];
-    const paletteIndex = preview.blocks[index + 3];
-    const state = preview.palette[paletteIndex];
-    if (state) {
-      stateByPosition.set(positionKey(x, y, z), state);
+  if (stateByPosition) {
+    for (let index = 0; index < preview.blocks.length; index += 4) {
+      const x = preview.blocks[index];
+      const y = preview.blocks[index + 1];
+      const z = preview.blocks[index + 2];
+      const paletteIndex = preview.blocks[index + 3];
+      const state = preview.palette[paletteIndex];
+      if (state) {
+        stateByPosition.set(positionKey(x, y, z), state);
+      }
     }
   }
 
@@ -213,10 +218,25 @@ const buildWorld = (preview) => {
     if (!state) {
       continue;
     }
-    world.addBlock([x, y, z], state.id, resolveStateProperties(state, x, y, z, stateByPosition));
+    world.addBlock(
+      [x, y, z],
+      state.id,
+      stateByPosition ? resolveStateProperties(state, x, y, z, stateByPosition) : (state.properties || {})
+    );
   }
 
   return world;
+};
+
+const getBlocksPerSlice = (preview) => {
+  const blockCount = preview?.stats?.blockCount ?? 0;
+  if (blockCount >= 1_000_000) {
+    return 50_000;
+  }
+  if (blockCount >= 250_000) {
+    return 20_000;
+  }
+  return 5_000;
 };
 
 const ensureResources = async () => {
@@ -306,9 +326,10 @@ const renderPreview = async (preview) => {
 
   const world = buildWorld(preview);
   const currentRenderer = await ensureRenderer();
+  const blocksPerSlice = getBlocksPerSlice(preview);
 
   showOverlay(strings.meshingTitle, strings.meshingMessage);
-  await currentRenderer.setStructureProgressiveAsync(world, 5000, undefined, (built, total) => {
+  await currentRenderer.setStructureProgressiveAsync(world, blocksPerSlice, undefined, (built, total) => {
     if (total > 0) {
       showOverlay(strings.meshingTitle, formatString(strings.meshingProgress, { built, total }));
     }
@@ -331,6 +352,52 @@ window.addEventListener('resize', () => {
 window.addEventListener('message', async (event) => {
   const message = event.data;
 
+  if (message?.type === 'setStatus') {
+    showOverlay(message.title || strings.loadingTitle, message.message || strings.preparingRenderer);
+    return;
+  }
+
+  if (message?.type === 'previewStart') {
+    pendingPreview = {
+      requestId: message.requestId,
+      preview: {
+        ...(message.preview || {}),
+        blocks: []
+      },
+      totalChunks: Math.max(1, Number(message.totalChunks) || 1)
+    };
+    showOverlay(strings.loadingTitle, strings.preparingRenderer);
+    return;
+  }
+
+  if (message?.type === 'previewChunk') {
+    if (!pendingPreview || pendingPreview.requestId !== message.requestId) {
+      return;
+    }
+
+    const blocks = Array.isArray(message.blocks) ? message.blocks : [];
+    for (let index = 0; index < blocks.length; index += 1) {
+      pendingPreview.preview.blocks.push(blocks[index]);
+    }
+    return;
+  }
+
+  if (message?.type === 'previewEnd') {
+    if (!pendingPreview || pendingPreview.requestId !== message.requestId) {
+      return;
+    }
+
+    const preview = pendingPreview.preview;
+    pendingPreview = null;
+    try {
+      await renderPreview(preview);
+    } catch (error) {
+      const description = error instanceof Error ? error.message : String(error);
+      showOverlay(strings.previewFailedTitle, description, 'error');
+    }
+    return;
+  }
+
   if (message?.type === 'setPreview') {
     const preview = message.previewStr ? JSON.parse(message.previewStr) : message.preview;
     try {
@@ -343,6 +410,7 @@ window.addEventListener('message', async (event) => {
   }
 
   if (message?.type === 'setError') {
+    pendingPreview = null;
     showOverlay(strings.previewFailedTitle, message.message || strings.unknownError, 'error');
   }
 });
