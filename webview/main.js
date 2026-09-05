@@ -340,6 +340,10 @@ const fitCameraToPreview = (preview) => {
   );
 };
 
+const warmRenderer = () => {
+  void ensureRenderer().catch(() => {});
+};
+
 const renderPreview = async (preview, requestId = null) => {
   cancelActiveRender();
   updateSummary(preview);
@@ -348,8 +352,9 @@ const renderPreview = async (preview, requestId = null) => {
     showOverlay(strings.loadingResourcesTitle, strings.loadingResourcesMessage);
   }
 
-  const world = buildWorld(preview);
-  const currentRenderer = await ensureRenderer();
+  const worldPromise = Promise.resolve().then(() => buildWorld(preview));
+  const rendererPromise = ensureRenderer();
+  const [world, currentRenderer] = await Promise.all([worldPromise, rendererPromise]);
   const blocksPerSlice = getBlocksPerSlice(preview);
   const renderController = new AbortController();
   activeRenderController = renderController;
@@ -413,6 +418,7 @@ window.addEventListener('message', async (event) => {
     cancelActiveRender();
     latestCompletedPreview = null;
     lastRenderedRequestId = null;
+    warmRenderer();
     pendingPreview = {
       requestId: message.requestId,
       preview: {
@@ -490,3 +496,4 @@ showOverlay(strings.waitingTitle, strings.waitingMessage);
 // (re)send the preview. This avoids a race where the preview is posted before
 // the webview is listening.
 vscode?.postMessage({ type: 'ready' });
+warmRenderer();

@@ -448,17 +448,17 @@ class SchematicViewerProvider {
 
       try {
         await postStatus(strings.loadingTitle, strings.readingFile);
-        const fileInfo = await vscode.workspace.fs.stat(document.uri);
+        const bytes = await vscode.workspace.fs.readFile(document.uri);
         if (disposed || !isPanelVisible || loadId !== activeLoadId) {
           return;
         }
         await postStatus(strings.loadingTitle, strings.parsingStructure);
-        const workerJob = fileInfo.size > PREVIEW_PROCESS_FILE_SIZE_THRESHOLD
+        const workerJob = bytes.byteLength > PREVIEW_PROCESS_FILE_SIZE_THRESHOLD
           ? startPreviewProcess(this.extensionUri.fsPath, document.uri.fsPath)
           : startPreviewThread(
               this.extensionUri.fsPath,
               document.uri.fsPath,
-              await vscode.workspace.fs.readFile(document.uri)
+              bytes
             );
         activeWorker = workerJob.worker;
         const preview = await workerJob.result;
