@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { Worker } from 'node:worker_threads';
 import * as vscode from 'vscode';
+import { createPreviewData } from './nbtPreview.js';
 
 const VIEW_TYPE = 'minecraftSchematicViewer.viewer';
 const DEFAULT_LOCALE = 'en';
@@ -198,23 +198,6 @@ const getNonce = () => {
   return value;
 };
 
-const PREVIEW_WORKER_SOURCE = `
-const { parentPort, workerData } = require('node:worker_threads');
-const { pathToFileURL } = require('node:url');
-
-(async () => {
-  const moduleUrl = pathToFileURL(workerData.modulePath).href;
-  const mod = await import(moduleUrl);
-  const preview = await mod.createPreviewData(workerData.fileName, workerData.bytes, { yieldInterval: 0 });
-  parentPort.postMessage({ type: 'result', preview });
-})().catch((error) => {
-  parentPort.postMessage({
-    type: 'error',
-    message: error instanceof Error ? error.message : String(error)
-  });
-});
-`;
-
 const killActiveWorker = (worker) => {
   if (!worker) {
     return;
@@ -283,51 +266,6 @@ const startPreviewProcess = (extensionFsPath, fileName) => {
       }
 
       reject(new Error('Preview worker exited without a result payload.'));
-    });
-  });
-
-  return { worker, result };
-};
-
-const startPreviewThread = (extensionFsPath, fileName, fileBytes) => {
-  const modulePath = path.join(extensionFsPath, 'src', 'nbtPreview.js');
-  const workerBytes = fileBytes.byteOffset === 0 && fileBytes.byteLength === fileBytes.buffer.byteLength
-    ? fileBytes
-    : Uint8Array.from(fileBytes);
-  const worker = new Worker(PREVIEW_WORKER_SOURCE, {
-    eval: true,
-    workerData: {
-      modulePath,
-      fileName,
-      bytes: workerBytes
-    },
-    transferList: [workerBytes.buffer]
-  });
-
-  const result = new Promise((resolve, reject) => {
-    const cleanup = () => {
-      worker.removeAllListeners();
-    };
-
-    worker.once('message', (message) => {
-      cleanup();
-      if (message?.type === 'result') {
-        resolve(message.preview);
-        return;
-      }
-      reject(new Error(message?.message || 'Preview worker failed.'));
-    });
-
-    worker.once('error', (error) => {
-      cleanup();
-      reject(error);
-    });
-
-    worker.once('exit', (code) => {
-      cleanup();
-      if (code !== 0) {
-        reject(new Error(`Preview worker exited with code ${code}.`));
-      }
     });
   });
 
@@ -453,15 +391,13 @@ class SchematicViewerProvider {
           return;
         }
         await postStatus(strings.loadingTitle, strings.parsingStructure);
-        const workerJob = bytes.byteLength > PREVIEW_PROCESS_FILE_SIZE_THRESHOLD
-          ? startPreviewProcess(this.extensionUri.fsPath, document.uri.fsPath)
-          : startPreviewThread(
-              this.extensionUri.fsPath,
-              document.uri.fsPath,
-              bytes
-            );
-        activeWorker = workerJob.worker;
-        const preview = await workerJob.result;
+        const preview = await (bytes.byteLength > PREVIEW_PROCESS_FILE_SIZE_THRESHOLD
+          ? (() => {
+              const workerJob = startPreviewProcess(this.extensionUri.fsPath, document.uri.fsPath);
+              activeWorker = workerJob.worker;
+              return workerJob.result;
+            })()
+          : createPreviewData(document.uri.fsPath, bytes));
         if (disposed || loadId !== activeLoadId) {
           killActiveWorker(activeWorker);
           activeWorker = null;
