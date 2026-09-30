@@ -41,6 +41,14 @@ npm run build
 
 This builds both the extension host bundle and the webview bundle into `dist/`.
 
+### Automated releases
+
+The [release workflow](.github/workflows/release.yml) runs when a `vX.Y.Z` tag is pushed. The tag must match `package.json`. It tests and builds one VSIX, attaches it to a GitHub release, then publishes that same VSIX to Open VSX and the Visual Studio Marketplace. Rerunning a tag skips registry versions already published.
+
+Before the first automated release, register a GitHub Actions trusted publisher for the `jacklitstar` publisher or namespace in both [Open VSX](https://github.com/eclipse-openvsx/openvsx/blob/main/cli/README.md#trusted-publishing) and the [Visual Studio Marketplace](https://github.com/microsoft/vscode-vsce#trusted-publishing). Use repository `jacklitstar/vscode-litematic-viewer`, workflow filename `release.yml`, and no GitHub environment. Both registries must already have an active publisher or namespace. The workflow uses short-lived GitHub identity tokens, so it needs no publishing PAT secrets.
+
+Commit the version bump and workflow before pushing the matching tag. Tags released before this workflow was added, including `v0.0.6`, do not trigger it retroactively.
+
 
 ## License
 

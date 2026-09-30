@@ -1,0 +1,89 @@
+name: Release extension
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      vsix_name: ${{ steps.version.outputs.vsix_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Check tag matches extension version
+        id: version
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          fi
+          echo "vsix_name=minecraft-schematic-viewer-$version.vsix" >> "$GITHUB_OUTPUT"
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - name: Package VSIX
+        env:
+          VSIX_NAME: ${{ steps.version.outputs.vsix_name }}
+        run: |
+          mkdir -p release
+          npx --yes @vscode/vsce@4.0.0 package --out "release/$VSIX_NAME"
+          unzip -t "release/$VSIX_NAME" >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extension-vsix
+          path: release/${{ steps.version.outputs.vsix_name }}
+          if-no-files-found: error
+
+  publish:
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      VSIX_NAME: ${{ needs.package.outputs.vsix_name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: extension-vsix
+          path: release
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          vsix="release/$VSIX_NAME"
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            existing_digest="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" --jq ".assets[] | select(.name == \"$VSIX_NAME\") | .digest")"
+            if [[ -z "$existing_digest" ]]; then
+              gh release upload "$GITHUB_REF_NAME" "$vsix" --repo "$GITHUB_REPOSITORY"
+            else
+              local_digest="sha256:$(sha256sum "$vsix" | cut -d' ' -f1)"
+              if [[ "$existing_digest" != "$local_digest" ]]; then
+                echo "::error::The existing GitHub release asset differs from this VSIX"
+                exit 1
+              fi
+            fi
+          else
+            gh release create "$GITHUB_REF_NAME" "$vsix" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
+          fi
+      - name: Publish to Open VSX
+        run: npx --yes ovsx@1.2.0 publish "release/$VSIX_NAME" --trusted-publishing --skip-duplicate
+      - name: Publish to Visual Studio Marketplace
+        run: npx --yes @vscode/vsce@4.0.0 publish --packagePath "release/$VSIX_NAME" --oidc --skip-duplicate
