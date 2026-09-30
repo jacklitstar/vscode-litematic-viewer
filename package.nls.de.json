@@ -2,5 +2,6 @@
   "displayName": "Minecraft-Schemaanzeige",
   "description": "Zeigt Minecraft-Schemadateien in einem VS Code-Editor-Tab an.",
   "customEditor.displayName": "Minecraft-Schemaanzeige",
-  "command.openActiveFile.title": "Minecraft-Schemaanzeige: Aktive Datei öffnen"
+  "command.openActiveFile.title": "Minecraft-Schemaanzeige: Aktive Datei öffnen",
+  "command.openResourcePacksFolder.title": "Minecraft-Schemaanzeige: Ressourcenpaketordner öffnen"
 }

@@ -113,6 +113,58 @@ body {
   min-height: 0;
 }
 
+.resource-pack-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--vscode-panel-border);
+}
+
+.resource-pack-section h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+#resource-pack-select,
+.resource-pack-actions button {
+  min-height: 28px;
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border));
+  border-radius: 5px;
+  color: var(--vscode-dropdown-foreground, var(--vscode-editor-foreground));
+  background: var(--vscode-dropdown-background, var(--vscode-editor-background));
+  font: inherit;
+  font-size: 12px;
+}
+
+#resource-pack-select {
+  width: 100%;
+  padding: 3px 6px;
+}
+
+.resource-pack-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.resource-pack-actions button {
+  flex: 1;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+
+.resource-pack-actions button:hover {
+  background: var(--vscode-button-hoverBackground, var(--vscode-list-hoverBackground));
+}
+
+.resource-pack-hint {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .card {
   display: flex;
   flex-direction: column;
@@ -197,14 +249,55 @@ body {
 
 @media (max-width: 1024px) {
   .app-shell {
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 3fr) minmax(220px, 1fr);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .viewport-panel {
+    flex: 0 0 50%;
+    min-height: 300px;
   }
 
   .sidebar {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-template-rows: 1fr;
+    flex: 1 0 auto;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: max-content minmax(220px, 1fr);
+    min-height: 520px;
+  }
+
+  .materials-list {
     min-height: 0;
-    overflow: hidden;
+  }
+
+}
+
+@media (max-width: 600px) {
+  .sidebar {
+    grid-template-rows: max-content minmax(220px, 1fr);
+    min-height: 0;
+  }
+}
+
+@media (min-width: 480px) and (max-width: 1024px) {
+  .summary-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(205px, 0.75fr);
+    grid-template-rows: auto 1fr;
+    column-gap: 12px;
+  }
+
+  .summary-card h2 {
+    grid-column: 1 / -1;
+  }
+
+  .resource-pack-section {
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 0;
+    margin-top: 0;
+    padding: 0 0 0 12px;
+    border-top: 0;
+    border-left: 1px solid var(--vscode-panel-border);
   }
 }

@@ -5,6 +5,17 @@ import {
   TextureAtlas,
   upperPowerOfTwo
 } from 'deepslate';
+import { loadResourcePackFiles, parseResourcePackAssetPath, readResourcePackJson } from './resourcePackFiles.mjs';
+
+const forEachConcurrent = async (items, concurrency, callback) => {
+  let nextIndex = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const item = items[nextIndex++];
+      await callback(item);
+    }
+  }));
+};
 
 const fetchJson = async (url) => {
   const response = await fetch(url);
@@ -167,14 +178,38 @@ const deriveDefaultProperties = (definition) => {
   return {};
 };
 
-export const loadVsCodeThreeDBlocksResources = async (resourceBase) => {
+export const loadVsCodeThreeDBlocksResources = async (resourceBase, packSource = null, maxTextureSize = 16384) => {
   const baseUrl = `${resourceBase}/minecraft`;
-  const config = await fetchJson(`${baseUrl}/config.json`);
-  const blockstates = await fetchJson(`${baseUrl}/assets/block_definition/data.min.json`);
-  const models = await fetchJson(`${baseUrl}/assets/model/data.min.json`);
-  const uvMap = await fetchJson(`${baseUrl}/assets/atlas/data.min.json`);
-  const opaqueData = await fetchJson(`${baseUrl}/assets/opaque/blocks.json`);
-  const { atlasSize, imageData } = await loadImageData(`${baseUrl}/assets/atlas/atlas.png`);
+  const [config, blockstates, models, uvMap, opaqueData, atlas, packFiles] = await Promise.all([
+    fetchJson(`${baseUrl}/config.json`),
+    fetchJson(`${baseUrl}/assets/block_definition/data.min.json`),
+    fetchJson(`${baseUrl}/assets/model/data.min.json`),
+    fetchJson(`${baseUrl}/assets/atlas/data.min.json`),
+    fetchJson(`${baseUrl}/assets/opaque/blocks.json`),
+    loadImageData(`${baseUrl}/assets/atlas/atlas.png`),
+    loadResourcePackFiles(packSource)
+  ]);
+  const { atlasSize: vanillaAtlasSize, imageData } = atlas;
+
+  const packBlockstates = {};
+  const packModels = {};
+  const packTextures = [];
+  await forEachConcurrent(packFiles, 12, async (file) => {
+    const { namespace, category, name } = parseResourcePackAssetPath(file.path);
+    const id = `${namespace}:${name}`;
+    if (category === 'textures') {
+      packTextures.push({ id, file });
+    } else {
+      const value = await readResourcePackJson(file);
+      if (value) {
+        if (category === 'blockstates') {
+          packBlockstates[id] = value;
+        } else {
+          packModels[id] = value;
+        }
+      }
+    }
+  });
 
   const blockDefinitions = {};
   const blockDefaultProperties = {};
@@ -183,10 +218,26 @@ export const loadVsCodeThreeDBlocksResources = async (resourceBase) => {
     blockDefinitions[`${config.namespace}:${id}`] = BlockDefinition.fromJson(normalizedDefinition);
     blockDefaultProperties[`${config.namespace}:${id}`] = deriveDefaultProperties(normalizedDefinition);
   }
+  for (const [id, definition] of Object.entries(packBlockstates)) {
+    try {
+      const normalizedDefinition = normalizeBlockDefinition(definition);
+      blockDefinitions[id] = BlockDefinition.fromJson(normalizedDefinition);
+      blockDefaultProperties[id] = deriveDefaultProperties(normalizedDefinition);
+    } catch (error) {
+      console.warn(`Skipping invalid resource pack blockstate ${id}:`, error);
+    }
+  }
 
   const blockModels = {};
   for (const id of Object.keys(models)) {
     blockModels[`${config.namespace}:${id}`] = BlockModel.fromJson(models[id]);
+  }
+  for (const [id, model] of Object.entries(packModels)) {
+    try {
+      blockModels[id] = BlockModel.fromJson(model);
+    } catch (error) {
+      console.warn(`Skipping invalid resource pack model ${id}:`, error);
+    }
   }
   flattenModels(blockModels);
 
@@ -194,6 +245,47 @@ export const loadVsCodeThreeDBlocksResources = async (resourceBase) => {
   for (const [id, [u0, v0, du, dv]] of Object.entries(uvMap)) {
     const dv2 = (du !== dv && id.startsWith('block/')) ? du : dv;
     rawUvMap[new Identifier(config.namespace, id).toString()] = [u0, v0, u0 + du, v0 + dv2];
+  }
+
+  let atlasSize = vanillaAtlasSize;
+  let atlasData = imageData;
+  if (packTextures.length > 0) {
+    const slotSize = 16;
+    const columns = Math.floor(vanillaAtlasSize / slotSize);
+    const usedHeight = Math.max(...Object.values(uvMap).map(([, y, , height]) => y + height));
+    const extraStartY = Math.ceil(usedHeight / slotSize) * slotSize;
+    const extraTextures = packTextures
+      .filter(({ id }) => !rawUvMap[id])
+      .sort((a, b) => a.id.localeCompare(b.id));
+    const extraRows = Math.ceil(extraTextures.length / columns);
+    atlasSize = upperPowerOfTwo(Math.max(vanillaAtlasSize, extraStartY + extraRows * slotSize));
+    if (atlasSize > maxTextureSize) {
+      throw new Error(`Resource pack needs a ${atlasSize}px texture atlas, but this device supports ${maxTextureSize}px.`);
+    }
+
+    extraTextures.forEach(({ id }, index) => {
+      const x = (index % columns) * slotSize;
+      const y = extraStartY + Math.floor(index / columns) * slotSize;
+      rawUvMap[id] = [x, y, x + slotSize, y + slotSize];
+    });
+
+    const canvas = typeof OffscreenCanvas !== 'undefined'
+      ? new OffscreenCanvas(atlasSize, atlasSize)
+      : Object.assign(document.createElement('canvas'), { width: atlasSize, height: atlasSize });
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('Failed to create resource pack texture atlas.');
+    }
+    ctx.putImageData(imageData, 0, 0);
+    await forEachConcurrent(packTextures, 8, async ({ id, file }) => {
+      const image = await file.image();
+      const [x0, y0, x1, y1] = rawUvMap[id];
+      const side = Math.min(image.width, image.height);
+      ctx.clearRect(x0, y0, x1 - x0, y1 - y0);
+      ctx.drawImage(image, 0, 0, side, side, x0, y0, x1 - x0, y1 - y0);
+      image.close?.();
+    });
+    atlasData = ctx.getImageData(0, 0, atlasSize, atlasSize);
   }
 
   const normalizedUvMap = {};
@@ -206,7 +298,7 @@ export const loadVsCodeThreeDBlocksResources = async (resourceBase) => {
     ];
   }
 
-  const textureAtlas = new TextureAtlas(imageData, normalizedUvMap);
+  const textureAtlas = new TextureAtlas(atlasData, normalizedUvMap);
   const opaqueBlocks = new Set(
     Array.isArray(opaqueData?.opaque)
       ? opaqueData.opaque.map((id) => `${config.namespace}:${id}`)

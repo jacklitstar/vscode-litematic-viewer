@@ -2,5 +2,6 @@
   "displayName": "Minecraft スキーマティックビューアー",
   "description": "VS Code のエディタータブで Minecraft の設計図ファイルをプレビューします。",
   "customEditor.displayName": "Minecraft スキーマティックビューアー",
-  "command.openActiveFile.title": "Minecraft スキーマティックビューアー: アクティブファイルを開く"
+  "command.openActiveFile.title": "Minecraft スキーマティックビューアー: アクティブファイルを開く",
+  "command.openResourcePacksFolder.title": "Minecraft スキーマティックビューアー: リソースパックフォルダーを開く"
 }

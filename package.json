@@ -2,7 +2,7 @@
   "name": "minecraft-schematic-viewer",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "publisher": "jacklitstar",
   "repository": {
     "type": "git",
@@ -38,6 +38,7 @@
   "main": "./dist/extension.cjs",
   "dependencies": {
     "deepslate": "0.24.0",
+    "fflate": "0.8.2",
     "prismarine-nbt": "2.7.0"
   },
   "devDependencies": {
@@ -80,13 +81,18 @@
       {
         "command": "minecraftSchematicViewer.openActiveFile",
         "title": "%command.openActiveFile.title%"
+      },
+      {
+        "command": "minecraftSchematicViewer.openResourcePacksFolder",
+        "title": "%command.openResourcePacksFolder.title%"
       }
     ]
   },
   "scripts": {
     "build": "npm run build:extension && npm run build:webview",
     "build:extension": "vite build --config ./vite.extension.config.mjs",
-    "build:webview": "vite build --config ./vite.webview.config.mjs"
+    "build:webview": "vite build --config ./vite.webview.config.mjs",
+    "test": "node --test tests/*.test.mjs"
   },
   "files": [
     "assets/**",

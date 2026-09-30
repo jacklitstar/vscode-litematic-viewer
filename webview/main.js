@@ -21,6 +21,12 @@ const strings = {
   editorTitle: 'Minecraft Schematic Viewer',
   summary: 'Summary',
   materials: 'Materials',
+  resourcePacks: 'Resource Pack',
+  vanillaResourcePack: 'Vanilla',
+  openResourcePacksFolder: 'Open Packs Folder',
+  refreshResourcePacks: 'Refresh',
+  resourcePacksHint: 'ZIPs beside this file or packs in Packs Folder.',
+  nearbyPackSearchSkipped: 'Nearby ZIP search skipped: this folder has more than 1,000 ZIP files.',
   file: 'File',
   size: 'Size',
   blocks: 'Blocks',
@@ -58,7 +64,7 @@ document.querySelector('#app').innerHTML = `
       </div>
     </section>
     <aside class="sidebar">
-      <section class="card">
+      <section class="card summary-card">
         <h2>${strings.summary}</h2>
         <dl class="summary-grid">
           <div class="summary-wide"><dt>${strings.file}</dt><dd id="summary-file">-</dd></div>
@@ -67,6 +73,17 @@ document.querySelector('#app').innerHTML = `
           <div><dt>${strings.palette}</dt><dd id="summary-palette">-</dd></div>
           <div><dt>${strings.regions}</dt><dd id="summary-regions">-</dd></div>
         </dl>
+        <section class="resource-pack-section">
+          <h3>${strings.resourcePacks}</h3>
+          <select id="resource-pack-select" aria-label="${strings.resourcePacks}" disabled>
+            <option value="">${strings.vanillaResourcePack}</option>
+          </select>
+          <div class="resource-pack-actions">
+            <button id="open-resource-packs-folder" type="button">${strings.openResourcePacksFolder}</button>
+            <button id="refresh-resource-packs" type="button">${strings.refreshResourcePacks}</button>
+          </div>
+          <div class="resource-pack-hint" id="resource-pack-hint">${strings.resourcePacksHint}</div>
+        </section>
       </section>
       <section class="card">
         <h2>${strings.materials}</h2>
@@ -84,6 +101,10 @@ const elements = {
   overlay: document.querySelector('#overlay'),
   overlayMessage: document.querySelector('#overlay-message'),
   overlayTitle: document.querySelector('#overlay-title'),
+  openResourcePacksFolder: document.querySelector('#open-resource-packs-folder'),
+  refreshResourcePacks: document.querySelector('#refresh-resource-packs'),
+  resourcePackHint: document.querySelector('#resource-pack-hint'),
+  resourcePackSelect: document.querySelector('#resource-pack-select'),
   stage: document.querySelector('#viewport-stage'),
   summaryBlocks: document.querySelector('#summary-blocks'),
   summaryFile: document.querySelector('#summary-file'),
@@ -96,13 +117,32 @@ let gl = null;
 let renderer = null;
 let interactiveCanvas = null;
 let resourcesPromise = null;
+let rendererPromise = null;
 let resizeObserver = null;
 let pendingPreview = null;
 let latestCompletedPreview = null;
 let activeRenderController = null;
+let renderRevision = 0;
 let lastRenderedRequestId = null;
 let isPanelVisible = true;
 let resourcesReady = false;
+let selectedPackSource = null;
+let packGeneration = 0;
+let resolvePackStateReady;
+const packStateReady = new Promise((resolve) => { resolvePackStateReady = resolve; });
+
+const abortForPackChange = () => new DOMException('Resource pack changed.', 'AbortError');
+
+elements.resourcePackSelect.addEventListener('change', () => {
+  elements.resourcePackSelect.disabled = true;
+  vscode?.postMessage({ type: 'selectResourcePack', id: elements.resourcePackSelect.value });
+});
+elements.openResourcePacksFolder.addEventListener('click', () => {
+  vscode?.postMessage({ type: 'openResourcePacksFolder' });
+});
+elements.refreshResourcePacks.addEventListener('click', () => {
+  vscode?.postMessage({ type: 'refreshResourcePacks' });
+});
 
 const parseCssRgb = (value) => {
   if (typeof value !== 'string') {
@@ -251,6 +291,7 @@ const isAbortError = (error) => (
 );
 
 const cancelActiveRender = () => {
+  renderRevision += 1;
   if (activeRenderController) {
     activeRenderController.abort();
     activeRenderController = null;
@@ -258,10 +299,19 @@ const cancelActiveRender = () => {
 };
 
 const ensureResources = async () => {
+  await packStateReady;
+  const generation = packGeneration;
   if (!resourcesPromise) {
-    resourcesPromise = loadVsCodeThreeDBlocksResources(config.resourceBase);
+    resourcesPromise = loadVsCodeThreeDBlocksResources(
+      config.resourceBase,
+      selectedPackSource,
+      gl?.getParameter(gl.MAX_TEXTURE_SIZE) || 16384
+    );
   }
   const resources = await resourcesPromise;
+  if (generation !== packGeneration) {
+    throw abortForPackChange();
+  }
   resourcesReady = true;
   return resources;
 };
@@ -277,9 +327,20 @@ const ensureRenderer = async () => {
     }
   }
 
-  if (!renderer) {
+  if (renderer) {
+    return renderer;
+  }
+  if (rendererPromise) {
+    return rendererPromise;
+  }
+
+  const generation = packGeneration;
+  const pending = (async () => {
     const resources = await ensureResources();
-    renderer = new ThreeDBlocksRenderer(
+    if (generation !== packGeneration) {
+      throw abortForPackChange();
+    }
+    const nextRenderer = new ThreeDBlocksRenderer(
       gl,
       new BlockWorld([1, 1, 1]),
       resources,
@@ -292,29 +353,42 @@ const ensureRenderer = async () => {
         versionTag: 'minecraft-schematic-viewer'
       }
     );
-  }
+    if (generation !== packGeneration) {
+      nextRenderer.dispose();
+      throw abortForPackChange();
+    }
+    renderer = nextRenderer;
 
-  if (!interactiveCanvas) {
-    interactiveCanvas = new InteractiveCanvas(
-      elements.canvas,
-      undefined,
-      (view) => {
-        const [r, g, b] = getThemeClearColor();
-        gl.clearColor(r, g, b, 1);
-        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-        renderer.drawStructure(view);
-      }
-    );
-  }
+    if (!interactiveCanvas) {
+      interactiveCanvas = new InteractiveCanvas(
+        elements.canvas,
+        undefined,
+        (view) => {
+          const [r, g, b] = getThemeClearColor();
+          gl.clearColor(r, g, b, 1);
+          gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+          renderer?.drawStructure(view);
+        }
+      );
+    }
 
-  if (!resizeObserver) {
-    resizeObserver = new ResizeObserver(() => {
-      interactiveCanvas?.redraw();
-    });
-    resizeObserver.observe(elements.stage);
-  }
+    if (!resizeObserver) {
+      resizeObserver = new ResizeObserver(() => {
+        interactiveCanvas?.redraw();
+      });
+      resizeObserver.observe(elements.stage);
+    }
 
-  return renderer;
+    return renderer;
+  })();
+  rendererPromise = pending;
+  try {
+    return await pending;
+  } finally {
+    if (rendererPromise === pending) {
+      rendererPromise = null;
+    }
+  }
 };
 
 const fitCameraToPreview = (preview) => {
@@ -346,6 +420,8 @@ const warmRenderer = () => {
 
 const renderPreview = async (preview, requestId = null) => {
   cancelActiveRender();
+  const revision = renderRevision;
+  const generation = packGeneration;
   updateSummary(preview);
 
   if (!renderer || !resourcesReady) {
@@ -355,6 +431,9 @@ const renderPreview = async (preview, requestId = null) => {
   const worldPromise = Promise.resolve().then(() => buildWorld(preview));
   const rendererPromise = ensureRenderer();
   const [world, currentRenderer] = await Promise.all([worldPromise, rendererPromise]);
+  if (generation !== packGeneration || revision !== renderRevision) {
+    throw abortForPackChange();
+  }
   const blocksPerSlice = getBlocksPerSlice(preview);
   const renderController = new AbortController();
   activeRenderController = renderController;
@@ -365,6 +444,9 @@ const renderPreview = async (preview, requestId = null) => {
       showOverlay(strings.meshingTitle, formatString(strings.meshingProgress, { built, total }));
     }
   });
+  if (generation !== packGeneration || revision !== renderRevision) {
+    throw abortForPackChange();
+  }
   if (activeRenderController === renderController) {
     activeRenderController = null;
   }
@@ -386,6 +468,46 @@ window.addEventListener('resize', () => {
 
 window.addEventListener('message', async (event) => {
   const message = event.data;
+
+  if (message?.type === 'resourcePacks') {
+    packGeneration += 1;
+    cancelActiveRender();
+    renderer?.dispose();
+    renderer = null;
+    rendererPromise = null;
+    resourcesPromise = null;
+    resourcesReady = false;
+    lastRenderedRequestId = null;
+    selectedPackSource = message.source || null;
+
+    elements.resourcePackSelect.replaceChildren();
+    for (const pack of [
+      { id: '', name: strings.vanillaResourcePack },
+      ...(Array.isArray(message.packs) ? message.packs : [])
+    ]) {
+      const option = document.createElement('option');
+      option.value = pack.id;
+      option.textContent = pack.name;
+      elements.resourcePackSelect.append(option);
+    }
+    elements.resourcePackSelect.value = message.selectedId || '';
+    elements.resourcePackSelect.disabled = false;
+    elements.resourcePackHint.textContent = message.error
+      || (message.nearbySearchSkipped ? strings.nearbyPackSearchSkipped : strings.resourcePacksHint);
+    elements.resourcePackHint.title = message.folderPath || '';
+
+    resolvePackStateReady();
+    if (latestCompletedPreview && isPanelVisible) {
+      try {
+        await renderPreview(latestCompletedPreview.preview, latestCompletedPreview.requestId);
+      } catch (error) {
+        if (!isAbortError(error)) {
+          showOverlay(strings.previewFailedTitle, error instanceof Error ? error.message : String(error), 'error');
+        }
+      }
+    }
+    return;
+  }
 
   if (message?.type === 'setVisibility') {
     isPanelVisible = Boolean(message.visible);

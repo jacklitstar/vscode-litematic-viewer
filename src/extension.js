@@ -2,6 +2,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import * as vscode from 'vscode';
 import { createPreviewData } from './nbtPreview.js';
+import { getResourcePacksRoot, getResourcePackSource, listResourcePacks } from './resourcePacks.js';
 
 const VIEW_TYPE = 'minecraftSchematicViewer.viewer';
 const DEFAULT_LOCALE = 'en';
@@ -12,6 +13,12 @@ const LOCALE_STRINGS = {
     editorTitle: 'Minecraft Schematic Viewer',
     summary: 'Summary',
     materials: 'Materials',
+    resourcePacks: 'Resource Pack',
+    vanillaResourcePack: 'Vanilla',
+    openResourcePacksFolder: 'Open Packs Folder',
+    refreshResourcePacks: 'Refresh',
+    resourcePacksHint: 'ZIPs beside this file or packs in Packs Folder.',
+    nearbyPackSearchSkipped: 'Nearby ZIP search skipped: this folder has more than 1,000 ZIP files.',
     file: 'File',
     size: 'Size',
     blocks: 'Blocks',
@@ -40,6 +47,12 @@ const LOCALE_STRINGS = {
     editorTitle: '我的世界投影查看器',
     summary: '摘要',
     materials: '材料',
+    resourcePacks: '资源包',
+    vanillaResourcePack: '原版',
+    openResourcePacksFolder: '打开资源包文件夹',
+    refreshResourcePacks: '刷新',
+    resourcePacksHint: '使用当前文件夹中的 ZIP 或资源包文件夹中的资源包。',
+    nearbyPackSearchSkipped: '当前文件夹中的 ZIP 文件超过 1,000 个，已跳过附近 ZIP 搜索。',
     file: '文件',
     size: '尺寸',
     blocks: '方块数量',
@@ -68,6 +81,12 @@ const LOCALE_STRINGS = {
     editorTitle: 'Minecraft スキーマティックビューアー',
     summary: '概要',
     materials: '素材',
+    resourcePacks: 'リソースパック',
+    vanillaResourcePack: 'バニラ',
+    openResourcePacksFolder: 'パックフォルダーを開く',
+    refreshResourcePacks: '更新',
+    resourcePacksHint: 'このファイルと同じフォルダーの ZIP、またはパックフォルダー内のパック。',
+    nearbyPackSearchSkipped: 'このフォルダーには 1,000 件を超える ZIP ファイルがあるため、検索を省略しました。',
     file: 'ファイル',
     size: 'サイズ',
     blocks: 'ブロック数',
@@ -96,6 +115,12 @@ const LOCALE_STRINGS = {
     editorTitle: 'Visionneuse de schémas Minecraft',
     summary: 'Résumé',
     materials: 'Matériaux',
+    resourcePacks: 'Pack de ressources',
+    vanillaResourcePack: 'Vanilla',
+    openResourcePacksFolder: 'Ouvrir le dossier',
+    refreshResourcePacks: 'Actualiser',
+    resourcePacksHint: 'ZIP à côté du fichier ou packs dans le dossier des packs.',
+    nearbyPackSearchSkipped: 'Recherche des ZIP ignorée : ce dossier contient plus de 1 000 fichiers ZIP.',
     file: 'Fichier',
     size: 'Taille',
     blocks: 'Nombre de blocs',
@@ -124,6 +149,12 @@ const LOCALE_STRINGS = {
     editorTitle: 'Minecraft-Schemaanzeige',
     summary: 'Zusammenfassung',
     materials: 'Materialien',
+    resourcePacks: 'Ressourcenpaket',
+    vanillaResourcePack: 'Vanilla',
+    openResourcePacksFolder: 'Paketordner öffnen',
+    refreshResourcePacks: 'Aktualisieren',
+    resourcePacksHint: 'ZIPs neben dieser Datei oder Pakete im Paketordner.',
+    nearbyPackSearchSkipped: 'ZIP-Suche übersprungen: Dieser Ordner enthält mehr als 1.000 ZIP-Dateien.',
     file: 'Datei',
     size: 'Größe',
     blocks: 'Blöcke',
@@ -152,6 +183,12 @@ const LOCALE_STRINGS = {
     editorTitle: 'Visor de esquemas de Minecraft',
     summary: 'Resumen',
     materials: 'Materiales',
+    resourcePacks: 'Paquete de recursos',
+    vanillaResourcePack: 'Original',
+    openResourcePacksFolder: 'Abrir carpeta',
+    refreshResourcePacks: 'Actualizar',
+    resourcePacksHint: 'ZIP junto a este archivo o paquetes en la carpeta de paquetes.',
+    nearbyPackSearchSkipped: 'Búsqueda de ZIP omitida: esta carpeta tiene más de 1.000 archivos ZIP.',
     file: 'Archivo',
     size: 'Tamaño',
     blocks: 'Bloques',
@@ -273,8 +310,16 @@ const startPreviewProcess = (extensionFsPath, fileName) => {
 };
 
 class SchematicViewerProvider {
-  constructor(extensionUri) {
-    this.extensionUri = extensionUri;
+  constructor(context) {
+    this.extensionUri = context.extensionUri;
+    this.context = context;
+    this.resourcePacksRoot = getResourcePacksRoot(context);
+    this.packPanelsByFolder = new Map();
+  }
+
+  async openResourcePacksFolder() {
+    await vscode.workspace.fs.createDirectory(this.resourcePacksRoot);
+    await vscode.commands.executeCommand('revealFileInOS', this.resourcePacksRoot);
   }
 
   async openCustomDocument(uri) {
@@ -286,18 +331,25 @@ class SchematicViewerProvider {
 
   async resolveCustomEditor(document, webviewPanel, _token) {
     const { localeKey, strings } = getLocaleStrings(vscode.env.language);
+    const folderUri = document.uri.with({
+      path: path.posix.dirname(document.uri.path),
+      query: '',
+      fragment: ''
+    });
+    const folderKey = folderUri.toString();
     webviewPanel.webview.options = {
       enableScripts: true,
       localResourceRoots: [
         vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview'),
-        vscode.Uri.joinPath(this.extensionUri, 'resources')
+        vscode.Uri.joinPath(this.extensionUri, 'resources'),
+        this.resourcePacksRoot,
+        folderUri
       ]
     };
     webviewPanel.webview.html = this.getHtml(webviewPanel.webview, localeKey, strings);
     webviewPanel.title = path.basename(document.uri.fsPath);
 
     const baseName = path.basename(document.uri.fsPath);
-    const folderUri = vscode.Uri.file(path.dirname(document.uri.fsPath));
     const watcher = vscode.workspace.createFileSystemWatcher(
       new vscode.RelativePattern(folderUri, baseName)
     );
@@ -310,6 +362,47 @@ class SchematicViewerProvider {
     let activeWorker = null;
     let pendingStatus = null;
     let disposed = false;
+    let packStateRequestId = 0;
+
+    const postResourcePackState = async () => {
+      const requestId = ++packStateRequestId;
+      try {
+        const { packs, nearbySearchSkipped } = await listResourcePacks(this.resourcePacksRoot, folderUri);
+        const savedId = this.context.globalState.get(`resourcePack:${folderKey}`, '');
+        const selectedPack = packs.find((pack) => pack.id === savedId)
+          || packs.find((pack) => pack.origin === 'storage' && pack.name === savedId);
+        const source = selectedPack
+          ? await getResourcePackSource(selectedPack, webviewPanel.webview)
+          : null;
+        if (disposed || requestId !== packStateRequestId) {
+          return;
+        }
+        await webviewPanel.webview.postMessage({
+          type: 'resourcePacks',
+          packs: packs.map(({ id, name, kind, origin, description }) => ({ id, name, kind, origin, description })),
+          selectedId: selectedPack?.id || '',
+          source,
+          nearbySearchSkipped,
+          folderPath: this.resourcePacksRoot.fsPath
+        });
+      } catch (error) {
+        if (disposed || requestId !== packStateRequestId) {
+          return;
+        }
+        await webviewPanel.webview.postMessage({
+          type: 'resourcePacks',
+          packs: [],
+          selectedId: '',
+          source: null,
+          folderPath: this.resourcePacksRoot.fsPath,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    };
+
+    const folderPanels = this.packPanelsByFolder.get(folderKey) || new Set();
+    folderPanels.add(postResourcePackState);
+    this.packPanelsByFolder.set(folderKey, folderPanels);
 
     const postStatus = async (title, message) => {
       pendingStatus = { title, message };
@@ -480,11 +573,16 @@ class SchematicViewerProvider {
       disposed = true;
       cancelActiveLoad();
       watcher.dispose();
+      folderPanels.delete(postResourcePackState);
+      if (folderPanels.size === 0) {
+        this.packPanelsByFolder.delete(folderKey);
+      }
     });
 
     webviewPanel.webview.onDidReceiveMessage((message) => {
       if (message.type === 'ready') {
         isWebviewReady = true;
+        void postResourcePackState();
         void webviewPanel.webview.postMessage({
           type: 'setVisibility',
           visible: isPanelVisible
@@ -496,6 +594,30 @@ class SchematicViewerProvider {
         } else if (!activeLoadPromise) {
           void ensurePreviewPosted();
         }
+      } else if (message.type === 'selectResourcePack') {
+        void (async () => {
+          const { packs } = await listResourcePacks(this.resourcePacksRoot, folderUri);
+          const requestedId = typeof message.id === 'string' ? message.id : '';
+          if (requestedId && !packs.some((pack) => pack.id === requestedId)) {
+            await postResourcePackState();
+            return;
+          }
+          await this.context.globalState.update(`resourcePack:${folderKey}`, requestedId);
+          for (const updatePanel of folderPanels) {
+            void updatePanel();
+          }
+        })().catch((error) => {
+          vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+          void postResourcePackState();
+        });
+      } else if (message.type === 'refreshResourcePacks') {
+        for (const updatePanel of folderPanels) {
+          void updatePanel();
+        }
+      } else if (message.type === 'openResourcePacksFolder') {
+        void this.openResourcePacksFolder().catch((error) => {
+          vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+        });
       }
     });
 
@@ -546,7 +668,7 @@ class SchematicViewerProvider {
 }
 
 export function activate(context) {
-  const provider = new SchematicViewerProvider(context.extensionUri);
+  const provider = new SchematicViewerProvider(context);
 
   context.subscriptions.push(
     vscode.window.registerCustomEditorProvider(VIEW_TYPE, provider, {
@@ -568,6 +690,11 @@ export function activate(context) {
 
       await vscode.commands.executeCommand('vscode.openWith', activeUri, VIEW_TYPE);
     })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('minecraftSchematicViewer.openResourcePacksFolder', () =>
+      provider.openResourcePacksFolder())
   );
 }
 

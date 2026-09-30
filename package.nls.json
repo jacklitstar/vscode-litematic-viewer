@@ -2,5 +2,6 @@
   "displayName": "Minecraft Schematic Viewer",
   "description": "Preview Minecraft schematic files in a VS Code editor tab.",
   "customEditor.displayName": "Minecraft Schematic Viewer",
-  "command.openActiveFile.title": "Minecraft Schematic Viewer: Open Active File"
+  "command.openActiveFile.title": "Minecraft Schematic Viewer: Open Active File",
+  "command.openResourcePacksFolder.title": "Minecraft Schematic Viewer: Open Resource Packs Folder"
 }
